@@ -60,7 +60,7 @@ class CalibrationApp:
         seed: Optional[int] = None,
         simulator: bool = False,
         windowed: bool = False,
-        config_path: Optional[str] = None,
+        config_path: Optional[Union[str, Path, Dict[str, Any]]] = None,
     ):
         self.subject = subject
         now_str = datetime.now().strftime("%Y%m%d")
@@ -69,9 +69,13 @@ class CalibrationApp:
         self.simulator = simulator
         self.windowed = windowed
         self.seed = seed
+        self.last_saved_log_path: Optional[Path] = None
 
         # Konfigürasyonları yükle
-        self.calib_config = load_calibration_config(config_path)
+        if isinstance(config_path, dict):
+            self.calib_config = copy.deepcopy(config_path)
+        else:
+            self.calib_config = load_calibration_config(config_path)
         try:
             self.xon_config = load_xon_config()
         except Exception:
@@ -142,22 +146,24 @@ class CalibrationApp:
 
     def init_pygame(self) -> None:
         """Pygame ortamını ve yazı tiplerini hazırlar."""
-        pygame.init()
-        flags = pygame.FULLSCREEN if self.fullscreen else 0
-        if flags == 0:
-            self.screen = pygame.display.set_mode((self.win_w, self.win_h))
-        else:
-            self.screen = pygame.display.set_mode((0, 0), flags)
-            self.win_w, self.win_h = self.screen.get_size()
+        if not pygame.get_init():
+            pygame.init()
+        if self.screen is None:
+            flags = pygame.FULLSCREEN if self.fullscreen else 0
+            if flags == 0:
+                self.screen = pygame.display.set_mode((self.win_w, self.win_h))
+            else:
+                self.screen = pygame.display.set_mode((0, 0), flags)
+                self.win_w, self.win_h = self.screen.get_size()
 
-        pygame.display.set_caption(f"Graz-BCI Kalibrasyon — {self.subject} ({self.profile})")
-        self.clock = pygame.time.Clock()
+            pygame.display.set_caption(f"Graz-BCI Kalibrasyon — {self.subject} ({self.profile})")
+            self.clock = pygame.time.Clock()
 
-        # Sistem yazı tipleri
-        self.font_title = get_system_font(28, bold=True)
-        self.font_main = get_system_font(20, bold=False)
-        self.font_small = get_system_font(15, bold=False)
-        self.font_cue = get_system_font(44, bold=True)
+        if self.font_title is None:
+            self.font_title = get_system_font(28, bold=True)
+            self.font_main = get_system_font(20, bold=False)
+            self.font_small = get_system_font(15, bold=False)
+            self.font_cue = get_system_font(44, bold=True)
 
     def search_eeg_stream(self, timeout: float = 3.0) -> bool:
         """X.on akışını arar ve meta verilerini okur."""
@@ -167,20 +173,25 @@ class CalibrationApp:
                 timeout=timeout,
                 allow_simulator=self.simulator,
             )
-            self.metadata = parse_xon_metadata(self.stream_info)
-            self.initial_impedances = copy.deepcopy(self.metadata.get("impedances", {}))
-
             # Kalite izleme için receiver oluştur
             self.receiver = XonStreamReceiver(
                 stream_info=self.stream_info,
                 buffer_duration=6.0,
                 allow_simulator=self.simulator,
             )
+            # resolve sonucu gelen StreamInfo <desc> içermez (impedans/filtre yok);
+            # tam meta veri yalnızca bağlı inlet'ten okunabilir.
+            self.metadata = self.receiver.metadata
+            self.initial_impedances = copy.deepcopy(self.metadata.get("impedances", {}))
             self.receiver.start(poll_interval=0.02)
             return True
-        except Exception as e:
-            logger.warning(f"EEG akışı arama hatası: {e}")
+        except TimeoutError as e:
+            logger.info(f"EEG akışı bulunamadı (zaman aşımı {timeout} sn): {e}")
             return False
+        except Exception as e:
+            logger.error(f"EEG akışı arama veya başlatma sırasında beklenmeyen hata: {e}", exc_info=True)
+            print(f"\n[HATA] EEG akışı aranırken beklenmeyen hata oluştu: {type(e).__name__}: {e}")
+            raise
 
     def check_motor_channels_quality(self) -> Tuple[bool, List[str]]:
         """C3, Cz, C4 kanallarının kalitesini kontrol eder."""
@@ -190,6 +201,17 @@ class CalibrationApp:
             return False, ["Henüz sinyal kalitesi hesaplanmadı."]
 
         all_ok = True
+        # PLAN 1.1b impedans kapısı: motor kanallarında impedans bilinmeli ve kabul eşiğinin altında olmalı
+        acceptable = self.xon_config.get("impedance_thresholds_kohm", {}).get("acceptable", 40000.0)
+        for ch in critical:
+            imp = self.initial_impedances.get(ch, {}).get("value")
+            if imp is None:
+                all_ok = False
+                warnings.append(f"{ch}: impedans bilgisi yok")
+            elif float(imp) > acceptable:
+                all_ok = False
+                warnings.append(f"{ch}: impedans yüksek ({float(imp):.0f} > {acceptable:.0f})")
+
         for ch in critical:
             q = self.quality_metrics.get(ch)
             if not q:
@@ -206,7 +228,10 @@ class CalibrationApp:
         """Son 5 saniyelik veriden canlı kalite metriklerini günceller."""
         if self.receiver is None or not self.receiver.is_running:
             return
-        samples, _ = self.receiver.get_window(window_sec=5.0)
+        if not self.receiver.ring_buffer.is_ready(1.0):
+            return
+        avail_sec = min(5.0, self.receiver.ring_buffer.sample_count / self.receiver.ring_buffer.srate)
+        samples, _ = self.receiver.get_latest_window(duration_sec=avail_sec)
         if len(samples) < 250:
             return
 
@@ -312,7 +337,7 @@ class CalibrationApp:
         c3_cz_c4_ok, warn_list = self.check_motor_channels_quality()
         warn_y = y_start + 28 + len(channels) * row_h + 15
         if not c3_cz_c4_ok and warn_list:
-            w_msg = "UYARI: C3, Cz, C4 motor kanallarında gürültü/kablo teması var: " + ", ".join(warn_list[:2])
+            w_msg = "UYARI (C3/Cz/C4): " + ", ".join(warn_list[:3])
             w_surf = self.font_small.render(w_msg, True, self.warn_color)
             self.screen.blit(w_surf, (cx - w_surf.get_width() // 2, warn_y))
         else:
@@ -501,13 +526,15 @@ class CalibrationApp:
         with open(log_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False)
 
+        self.last_saved_log_path = log_path
         logger.info(f"Oturum günlüğü kaydedildi: {log_path}")
         print(f"\n[Oturum Günlüğü] Kaydedildi: {log_path}")
         return log_path
 
-    def run(self) -> None:
+    def run(self, max_seconds: Optional[float] = None) -> None:
         """Ana döngü."""
-        self.init_pygame()
+        if self.screen is None:
+            self.init_pygame()
 
         # Konsola LabRecorder hatırlatması yaz
         print("=" * 70)
@@ -516,25 +543,35 @@ class CalibrationApp:
         print(f"[LabRecorder Önerisi] Kayıt dosyası: {self.get_suggested_filename(1)}")
         print("=" * 70)
 
-        # EEG Akışını bul
-        print("\nEEG akışı aranıyor...")
-        eeg_found = self.search_eeg_stream(timeout=4.0)
-        if eeg_found:
-            print(f"EEG akışı bağlandı: {self.stream_info.name()}")
-        else:
-            print("UYARI: EEG akışı bulunamadı. Simülatör veya cihazı başlatınız.")
+        # EEG Akışını bul (önceden başlatılmadıysa)
+        if self.receiver is None or not self.receiver.is_running:
+            print("\nEEG akışı aranıyor...")
+            try:
+                eeg_found = self.search_eeg_stream(timeout=4.0)
+                if eeg_found:
+                    print(f"EEG akışı bağlandı: {self.stream_info.name()}")
+                else:
+                    print("UYARI: EEG akışı bulunamadı. Simülatör veya cihazı başlatınız.")
+            except Exception as e:
+                print(f"HATA: EEG akışı başlatılırken beklenmeyen kod hatası oluştu: {e}")
+                raise
 
         # MarkerPublisher başlat
-        self.marker_pub = MarkerPublisher(
-            stream_name=self.marker_stream_name,
-            source_id=self.marker_source_id,
-        )
+        if self.marker_pub is None:
+            self.marker_pub = MarkerPublisher(
+                stream_name=self.marker_stream_name,
+                source_id=self.marker_source_id,
+            )
 
         last_quality_check = 0.0
+        start_loop_time = time.time()
 
         try:
             while self.running:
                 now_wall = time.time()
+                if max_seconds is not None and (now_wall - start_loop_time) >= max_seconds:
+                    logger.info(f"Maksimum süre ({max_seconds} sn) aşıldı, döngü sonlandırılıyor.")
+                    break
 
                 # Olayları işle
                 for event in pygame.event.get():
@@ -593,6 +630,8 @@ class CalibrationApp:
                             self.app_state = "COMPLETED"
                             self.end_timestamp_iso = datetime.now().isoformat()
                             self.save_session_log()
+                            if max_seconds is not None:
+                                self.running = False
 
                     else:
                         # Aşama içi normal ekran güncellemesi
@@ -604,7 +643,10 @@ class CalibrationApp:
                 elif self.app_state == "COMPLETED":
                     self.draw_completed_screen()
                     pygame.display.flip()
-                    self.clock.tick(30)
+                    if max_seconds is not None:
+                        self.running = False
+                    else:
+                        self.clock.tick(30)
 
         finally:
             if self.receiver is not None and self.receiver.is_running:

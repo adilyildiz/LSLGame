@@ -367,6 +367,19 @@ class XonStreamReceiver:
             self.pull_new_data(timeout=0.0)
             time.sleep(poll_interval)
 
+    @property
+    def is_running(self) -> bool:
+        """Alıcının çalışıp çalışmadığını (arka plan iş parçacığının aktif olduğunu) belirtir."""
+        return self._running
+
+    def get_latest_window(self, duration_sec: float) -> Tuple[np.ndarray, np.ndarray]:
+        """Tampondaki son duration_sec saniyelik veriyi ve zaman damgalarını döner."""
+        return self.ring_buffer.get_latest_window(duration_sec)
+
+    def get_window(self, window_sec: float = 5.0) -> Tuple[np.ndarray, np.ndarray]:
+        """get_latest_window için takma ad (alias)."""
+        return self.get_latest_window(window_sec)
+
     def start(self, poll_interval: float = 0.01) -> None:
         """Arka plan çekme iş parçacığını başlatır."""
         if self._running:

@@ -135,6 +135,20 @@ def create_xon_stream_info(
     return info
 
 
+CLASS_CODES: Dict[str, float] = {
+    "rest": 0.0,
+    "left": 1.0,
+    "right": 2.0,
+    "down": 3.0,
+    "feet": 3.0,
+    "foot": 3.0,
+    "up": 4.0,
+    "both_hands": 4.0,
+    "both": 4.0,
+    "arithmetic": 5.0,
+}
+
+
 class SyntheticEEGSource:
     """Sentetik X.on EEG LSL Yayınlayıcı sınıfı."""
 
@@ -146,15 +160,17 @@ class SyntheticEEGSource:
         erd_power_drop: float = 0.40,
         random_seed: Optional[int] = None,
         source_id: Optional[str] = None,
+        sync_channel: bool = False,
     ):
         self.name = name
         self.srate = float(srate)
-        self.chunk_size = chunk_size
+        self.chunk_size = int(chunk_size)
         self.erd_power_drop = float(erd_power_drop)
         self.erd_attenuation = float(np.sqrt(max(0.0, 1.0 - self.erd_power_drop)))
         self.random_seed = random_seed
         self.rng = np.random.default_rng(random_seed)
         self.source_id = source_id or "SIM-0000 250"
+        self.sync_channel = bool(sync_channel)
         self.n_channels = len(CHANNEL_LABELS)
 
         self.stream_info = create_xon_stream_info(name=self.name, srate=self.srate, source_id=self.source_id)
@@ -162,8 +178,12 @@ class SyntheticEEGSource:
 
         self.pink_noise = PinkNoiseGenerator(self.n_channels, rng=self.rng)
 
-        # Durum değişkenleri
+        # Durum değişkenleri ve örnek sayacı
         self._class: str = "rest"
+        self._current_base_class: str = "rest"
+        self._transitions: List[Tuple[float, str, str]] = []  # (timestamp, resolved, raw)
+        self._sample_counter: int = 0
+        self._t0: Optional[float] = None
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -178,10 +198,13 @@ class SyntheticEEGSource:
         self._blink_total_samples = 0
         self._blink_amplitude = 0.0
 
-    def set_class(self, class_name: str) -> None:
-        """Aktif zihinsel durumu değiştirir ('left', 'right', 'up', 'down', 'rest')."""
-        class_name = class_name.lower().strip()
-        # Kalibrasyon profilleri için sınıf eşlemeleri
+    def set_class(self, class_name: str, timestamp: Optional[float] = None) -> None:
+        """Aktif zihinsel durumu değiştirir ('left', 'right', 'up', 'down', 'rest').
+
+        timestamp parametresi verilirse geçiş tam o zamandan itibaren geçerli olur;
+        verilmezse pylsl.local_clock() kaydedilir.
+        """
+        class_name_clean = class_name.lower().strip()
         aliases = {
             "feet": "down",
             "foot": "down",
@@ -189,17 +212,26 @@ class SyntheticEEGSource:
             "both": "up",
             "arithmetic": "rest",
         }
-        resolved = aliases.get(class_name, class_name)
+        resolved = aliases.get(class_name_clean, class_name_clean)
         valid = {"left", "right", "up", "down", "rest"}
         if resolved not in valid:
             raise ValueError(f"Geçersiz sınıf: {class_name}. Geçerli olanlar: {valid}")
+
+        ts = float(timestamp) if timestamp is not None else pylsl.local_clock()
+
         with self._lock:
             self._class = resolved
-            logger.info(f"Sentetik EEG sınıfı güncellendi: {class_name} (dahili: {resolved})")
+            self._transitions.append((ts, resolved, class_name_clean))
+            self._transitions.sort(key=lambda x: x[0])
+            logger.info(
+                f"Sentetik EEG sınıfı planlandı: {class_name} (dahili: {resolved}, ts: {ts:.4f})"
+            )
 
     @property
     def current_class(self) -> str:
         with self._lock:
+            if self._transitions:
+                return self._transitions[-1][1]
             return self._class
 
     def inject_blink(self, amplitude: float = 150.0, duration_sec: float = 0.3) -> None:
@@ -211,26 +243,51 @@ class SyntheticEEGSource:
 
     def generate_chunk(self, n_samples: int) -> np.ndarray:
         """n_samples adet sentetik EEG/AUX verisi üretir."""
+        if self._t0 is None:
+            self._t0 = pylsl.local_clock()
+
         # 1. Pembe gürültü (taban EEG: ~5-15 µV RMS)
         pink = self.pink_noise.generate(n_samples) * 3.5
 
         # 2. Sinüzoidal ritimler (mu ~10 Hz, beta ~20 Hz, sebeke 50 Hz)
-        t = np.arange(n_samples) / self.srate
         dt_mu = 2.0 * np.pi * 10.0 / self.srate
         dt_beta = 2.0 * np.pi * 20.0 / self.srate
         dt_50 = 2.0 * np.pi * 50.0 / self.srate
 
-        # Kanal indeksleri:
-        # 0: F3, 1: F4, 2: C3, 3: Cz, 4: C4, 5: P3, 6: P4, 7: BIP, 8: accX, 9: accY, 10: accZ
         data = np.zeros((n_samples, self.n_channels), dtype=np.float32)
 
+        start_sample = self._sample_counter
+        sample_ts = self._t0 + (start_sample + np.arange(n_samples)) / self.srate
+
+        # Örnek düzeyinde sınıf ataması
+        sample_resolved_classes: List[str] = []
+        sample_raw_classes: List[str] = []
+
         with self._lock:
-            active_class = self._class
             blink_left = self._blink_samples_left
             blink_total = self._blink_total_samples
             blink_amp = self._blink_amplitude
 
-        # Temel ritim genlikleri (µV)
+            for ts in sample_ts:
+                cur_res = self._current_base_class
+                cur_raw = self._current_base_class
+                for tr_ts, tr_res, tr_raw in self._transitions:
+                    if tr_ts <= ts:
+                        cur_res = tr_res
+                        cur_raw = tr_raw
+                    else:
+                        break
+                sample_resolved_classes.append(cur_res)
+                sample_raw_classes.append(cur_raw)
+
+            # Bir sonraki blok için temel sınıfı ve geçişleri güncelle
+            if sample_resolved_classes:
+                self._current_base_class = sample_resolved_classes[-1]
+                last_sample_ts = sample_ts[-1]
+                self._transitions = [
+                    t for t in self._transitions if t[0] > last_sample_ts
+                ]
+
         base_mu_amp = {
             0: 5.0,   # F3
             1: 5.0,   # F4
@@ -239,29 +296,25 @@ class SyntheticEEGSource:
             4: 20.0,  # C4 (motor)
             5: 12.0,  # P3
             6: 12.0,  # P4
-            7: 0.0,   # BIP (pilot kayıtta 0)
+            7: 0.0,   # BIP
         }
 
-        # ERD kuralı: ~%40 güç düşüşü -> Genlik çarpanı sqrt(1 - erd_power_drop) ≈ 0.7746
         erd_attenuation = self.erd_attenuation
 
-        mu_scales = np.ones(self.n_channels, dtype=np.float32)
-        if active_class == "left":
-            # Sol el hayali -> kontralateral C4 düşer
-            mu_scales[4] = erd_attenuation
-        elif active_class == "right":
-            # Sağ el hayali -> kontralateral C3 düşer
-            mu_scales[2] = erd_attenuation
-        elif active_class == "down":
-            # Ayak hayali -> Cz düşer
-            mu_scales[3] = erd_attenuation
-        elif active_class == "up":
-            # İki el hayali -> C3 ve C4 birlikte düşer
-            mu_scales[2] = erd_attenuation
-            mu_scales[4] = erd_attenuation
+        # Her örnek için kontralateral ERD çarpanlarını hazırla
+        mu_scales = np.ones((n_samples, 7), dtype=np.float32)
+        for s_idx, s_cls in enumerate(sample_resolved_classes):
+            if s_cls == "left":
+                mu_scales[s_idx, 4] = erd_attenuation
+            elif s_cls == "right":
+                mu_scales[s_idx, 2] = erd_attenuation
+            elif s_cls == "down":
+                mu_scales[s_idx, 3] = erd_attenuation
+            elif s_cls == "up":
+                mu_scales[s_idx, 2] = erd_attenuation
+                mu_scales[s_idx, 4] = erd_attenuation
 
         for ch in range(7):
-            # Faz ilerlemesi
             phases_mu = self._phase_mu[ch] + np.cumsum(
                 np.full(n_samples, dt_mu) + self.rng.standard_normal(n_samples) * 0.02
             )
@@ -275,12 +328,10 @@ class SyntheticEEGSource:
             phases_50 = self._phase_50hz[ch] + np.cumsum(np.full(n_samples, dt_50))
             self._phase_50hz[ch] = phases_50[-1] % (2 * np.pi)
 
-            # 50 Hz şebeke gürültüsü (Cz hariç diğerlerinde biraz daha yüksek)
             amp_50 = 2.0 if ch == 3 else 8.0
-
             b_mu = base_mu_amp.get(ch, 10.0)
-            amp_mu = b_mu * mu_scales[ch]
-            amp_beta = (b_mu * 0.4) * mu_scales[ch]
+            amp_mu = b_mu * mu_scales[:, ch]
+            amp_beta = (b_mu * 0.4) * mu_scales[:, ch]
 
             data[:, ch] = (
                 pink[:, ch]
@@ -289,10 +340,17 @@ class SyntheticEEGSource:
                 + amp_50 * np.sin(phases_50)
             )
 
-        # BIP (Kanal 7): Boş / sıfır
-        data[:, 7] = 0.0
+        # BIP (Kanal 7): sync_channel=True ise aktif sınıfın sayısal kodu, değilse 0.0
+        if self.sync_channel:
+            for s_idx in range(n_samples):
+                raw_c = sample_raw_classes[s_idx]
+                res_c = sample_resolved_classes[s_idx]
+                code = CLASS_CODES.get(raw_c, CLASS_CODES.get(res_c, 0.0))
+                data[s_idx, 7] = float(code)
+        else:
+            data[:, 7] = 0.0
 
-        # İvmeölçer kanalları (8, 9, 10): Pilot ortalaması ~(-105, 806, -494) mg -> |g| ≈ 950 mg
+        # İvmeölçer kanalları (8, 9, 10)
         data[:, 8] = -105.0 + self.rng.standard_normal(n_samples) * 2.0
         data[:, 9] = 806.0 + self.rng.standard_normal(n_samples) * 2.0
         data[:, 10] = -494.0 + self.rng.standard_normal(n_samples) * 2.0
@@ -303,41 +361,60 @@ class SyntheticEEGSource:
                 with self._lock:
                     if self._blink_samples_left > 0:
                         prog = 1.0 - (self._blink_samples_left / self._blink_total_samples)
-                        # Yarım sinüs darbesi
                         pulse = float(np.sin(np.pi * prog) * self._blink_amplitude)
-                        data[s, 0] += pulse  # F3
-                        data[s, 1] += pulse  # F4
+                        data[s, 0] += pulse
+                        data[s, 1] += pulse
                         self._blink_samples_left -= 1
                     else:
                         break
 
+        self._sample_counter += n_samples
         return data
 
     def step(self) -> None:
-        """Tek bir chunk üretir ve LSL outlet'ine basar."""
+        """Tek bir chunk üretir ve açık zaman damgasıyla LSL outlet'ine basar."""
+        if self._t0 is None:
+            self._t0 = pylsl.local_clock()
+            self._sample_counter = 0
+
+        last_ts = self._t0 + (self._sample_counter + self.chunk_size - 1) / self.srate
         chunk = self.generate_chunk(self.chunk_size)
-        self.outlet.push_chunk(chunk.tolist())
+        self.outlet.push_chunk(chunk.tolist(), timestamp=last_ts)
 
     def _run_loop(self) -> None:
-        interval = self.chunk_size / self.srate
-        next_time = time.perf_counter()
+        """Gerçek zamanlı üretim döngüsü.
+
+        Üretim döngüsü gerçek zamandan ileri gitmez; paket ancak zamanı geldiğinde üretilir.
+        """
         while self._running:
+            target_ts = self._t0 + (self._sample_counter + self.chunk_size) / self.srate
+            now = pylsl.local_clock()
+            if now < target_ts:
+                sleep_dur = target_ts - now
+                if sleep_dur > 0.002:
+                    time.sleep(sleep_dur - 0.001)
+                while pylsl.local_clock() < target_ts and self._running:
+                    time.sleep(0.0002)
+
+            if not self._running:
+                break
+
             self.step()
-            next_time += interval
-            sleep_dur = next_time - time.perf_counter()
-            if sleep_dur > 0:
-                time.sleep(sleep_dur)
-            else:
-                next_time = time.perf_counter()
 
     def start(self) -> None:
         """Arka plan yayınını başlatır."""
         if self._running:
             return
+        self._t0 = pylsl.local_clock()
+        self._sample_counter = 0
+        self._current_base_class = self._class
+        self._transitions.clear()
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
-        logger.info(f"SyntheticEEGSource '{self.name}' yayını başlatıldı (250 Hz).")
+        logger.info(
+            f"SyntheticEEGSource '{self.name}' yayını başlatıldı (250 Hz, sync_channel={self.sync_channel})."
+        )
 
     def stop(self) -> None:
         """Arka plan yayınını durdurur."""

@@ -1,0 +1,101 @@
+....................................                                     [100%]
+=================================== PASSES ====================================
+___________________________ test_parse_xon_metadata ___________________________
+---------------------------- Captured stderr call -----------------------------
+2026-10-13 23:25:33.467 (   0.777s) [        9861D45D]      netinterfaces.cpp:36    INFO| netif '{464C402D-DAA4-4024-B7C7-F69F2FAA2544}' (status: 2, multicast: 1
+2026-10-13 23:25:33.467 (   0.777s) [        9861D45D]      netinterfaces.cpp:36    INFO| netif '{E42E7AB7-0C74-40A1-8EDE-D466C585CD47}' (status: 2, multicast: 1
+2026-10-13 23:25:33.467 (   0.777s) [        9861D45D]      netinterfaces.cpp:36    INFO| netif '{ED149363-172A-48E2-B5E4-F1A4D589429A}' (status: 2, multicast: 1
+2026-10-13 23:25:33.467 (   0.777s) [        9861D45D]      netinterfaces.cpp:36    INFO| netif '{D8943EA3-C5F7-4DD0-BCDC-D043EA7F080D}' (status: 1, multicast: 1
+2026-10-13 23:25:33.467 (   0.777s) [        9861D45D]      netinterfaces.cpp:58    INFO| 	IPv6 ifindex 19
+2026-10-13 23:25:33.467 (   0.777s) [        9861D45D]      netinterfaces.cpp:36    INFO| netif '{F2707CF8-2344-43FD-A43B-72B99A2B2CAD}' (status: 2, multicast: 1
+2026-10-13 23:25:33.467 (   0.777s) [        9861D45D]      netinterfaces.cpp:36    INFO| netif '{317011CB-AC81-4483-8BAE-828106C4F9C3}' (status: 2, multicast: 1
+2026-10-13 23:25:33.467 (   0.777s) [        9861D45D]      netinterfaces.cpp:36    INFO| netif '{171ACDCE-C7C4-11EF-8617-806E6F6E6963}' (status: 1, multicast: 1
+2026-10-13 23:25:33.467 (   0.777s) [        9861D45D]      netinterfaces.cpp:58    INFO| 	IPv6 ifindex 1
+2026-10-13 23:25:33.467 (   0.777s) [        9861D45D]         api_config.cpp:126   INFO| Loaded default config
+____________________ test_find_xon_stream_allow_simulator _____________________
+---------------------------- Captured stderr call -----------------------------
+2026-10-13 23:25:33.468 (   0.778s) [        9861D45D]             common.cpp:82    INFO| git:42118f80ff9235be11cd54d24b3a25f576c34812/branch:refs/tags/v1.18.0.b5/build:Release/compiler:MSVC-19.29.30159.0/link:SHARED
+________________ test_find_xon_stream_multiple_matches_warning ________________
+------------------------------ Captured log call ------------------------------
+WARNING  src.acquisition.stream_receiver:stream_receiver.py:83 Birden fazla X.on akışı bulundu (2 adet): ['X.on-SIM-MULTI2', 'X.on-SIM-MULTI1']. İlk eşleşen akış seçiliyor.
+___________ test_e2e_calibration_simulator_recording_and_alignment ____________
+---------------------------- Captured stdout call -----------------------------
+
+[K4 Hizalama Testi] Örnek Sayısı: 12 | Gecikme Min: 0.02 ms | Ortalama: 1.94 ms | Maks: 3.60 ms | Maks Ardışık Damga Farkı: 4.00 ms
+________ test_calibration_app_full_integration_real_hardware_simulator ________
+---------------------------- Captured stdout call -----------------------------
+======================================================================
+GRAZ-BCI KALİBRASYON VERİ TOPLAMA ARACI BAŞLATILDI
+Katılımcı: sub-k2 | Oturum: ses-test | Profil: mi2
+[LabRecorder Önerisi] Kayıt dosyası: data/sub-k2/ses-test/sub-k2_ses-test_task-MI_run-01.xdf
+======================================================================
+
+[Oturum Günlüğü] Kaydedildi: logs\calibration_sub-k2_ses-test_20261013_232541.json
+---------------------------- Captured stderr call -----------------------------
+2026-10-13 23:25:41.761 (   9.071s) [R_X.on-SIM-APP  ]      data_receiver.cpp:375    ERR| Stream transmission broke off (Input stream error.); re-connecting...
+__________________________ test_pilot_xdf_xon_stream __________________________
+------------------------------ Captured log call ------------------------------
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 5: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 6: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 1: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 2: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 7: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 8: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:409 Stream 4: Segments and clock-segments differ
+WARNING  pyxdf.pyxdf:pyxdf.py:409 Stream 6: Segments and clock-segments differ
+WARNING  pyxdf.pyxdf:pyxdf.py:409 Stream 2: Segments and clock-segments differ
+WARNING  pyxdf.pyxdf:pyxdf.py:409 Stream 10: Segments and clock-segments differ
+WARNING  pyxdf.pyxdf:pyxdf.py:409 Stream 8: Segments and clock-segments differ
+___________________________ test_xdf_replay_stream ____________________________
+---------------------------- Captured stderr call -----------------------------
+2026-10-13 23:25:52.846 (  20.156s) [I_X.on-103512-  ]      info_receiver.cpp:81     ERR| Error while receiving the stream info (Hedef makine etkin olarak reddetti�inden ba�lant� kurulamad�.); retrying...
+------------------------------ Captured log call ------------------------------
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 5: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 6: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 1: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 2: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 7: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:985 Stream 8: Calculated effective sampling rate 36.7833 Hz is different from specified rate 30.0000 Hz.
+WARNING  pyxdf.pyxdf:pyxdf.py:409 Stream 4: Segments and clock-segments differ
+WARNING  pyxdf.pyxdf:pyxdf.py:409 Stream 6: Segments and clock-segments differ
+WARNING  pyxdf.pyxdf:pyxdf.py:409 Stream 2: Segments and clock-segments differ
+WARNING  pyxdf.pyxdf:pyxdf.py:409 Stream 10: Segments and clock-segments differ
+WARNING  pyxdf.pyxdf:pyxdf.py:409 Stream 8: Segments and clock-segments differ
+=========================== short test summary info ===========================
+PASSED tests/test_acquisition.py::test_ring_buffer_basic
+PASSED tests/test_acquisition.py::test_ring_buffer_wraparound
+PASSED tests/test_acquisition.py::test_ring_buffer_get_latest_window
+PASSED tests/test_acquisition.py::test_parse_xon_metadata
+PASSED tests/test_acquisition.py::test_find_xon_stream_allow_simulator
+PASSED tests/test_acquisition.py::test_find_xon_stream_multiple_matches_warning
+PASSED tests/test_calibration.py::test_balanced_sequence_distribution_and_streak
+PASSED tests/test_calibration.py::test_state_machine_virtual_clock_timeline_and_markers
+PASSED tests/test_calibration.py::test_all_marker_names_are_strict_ascii
+PASSED tests/test_calibration.py::test_session_abort_saves_proper_log_and_markers
+PASSED tests/test_calibration.py::test_calibration_app_filename_and_quality_check
+PASSED tests/test_calibration.py::test_e2e_calibration_simulator_recording_and_alignment
+PASSED tests/test_calibration.py::test_calibration_config_file_integrity_and_cli_parsing
+PASSED tests/test_calibration_app.py::test_calibration_app_full_integration_real_hardware_simulator
+PASSED tests/test_control_contract.py::test_control_info_creation
+PASSED tests/test_control_contract.py::test_discrete_sender_receiver
+PASSED tests/test_control_contract.py::test_continuous_sender_receiver
+PASSED tests/test_control_contract.py::test_keyboard_source_emission
+PASSED tests/test_control_contract.py::test_control_receiver_sample_retention_and_staleness
+PASSED tests/test_control_contract.py::test_control_receiver_timeout_nonexistent_and_closed_stream
+PASSED tests/test_control_contract.py::test_standalone_keyboard_workflow
+PASSED tests/test_device_config.py::test_config_file_exists
+PASSED tests/test_device_config.py::test_config_contents
+PASSED tests/test_game_logic.py::test_game_logic_headless_movement_and_scoring
+PASSED tests/test_game_logic.py::test_target_sequence_balanced_and_constrained
+PASSED tests/test_game_logic.py::test_wrong_direction_results_in_miss
+PASSED tests/test_game_logic.py::test_idle_player_trial_timeout
+PASSED tests/test_game_logic.py::test_inter_trial_pause_ignores_commands
+PASSED tests/test_game_logic.py::test_ui_strings_contain_turkish_characters
+PASSED tests/test_game_logic.py::test_markers_are_pure_ascii_and_proper_sequence
+PASSED tests/test_pilot_xdf.py::test_pilot_xdf_exists
+PASSED tests/test_pilot_xdf.py::test_pilot_xdf_xon_stream
+PASSED tests/test_signal_quality.py::test_quality_metrics_pure_tones
+PASSED tests/test_synthetic_eeg.py::test_synthetic_eeg_metadata_and_streams
+PASSED tests/test_synthetic_eeg.py::test_synthetic_eeg_end_to_end_left_class_erd
+PASSED tests/test_xdf_replay.py::test_xdf_replay_stream
+36 passed in 22.55s

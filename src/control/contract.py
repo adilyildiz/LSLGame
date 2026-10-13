@@ -181,12 +181,13 @@ class ControlReceiver:
         )
         logger.info(f"BCI_Control akışına bağlandı. Mod: {self.mode.value}, Simülatör: {self.is_simulator}")
 
-    def pull_latest(self, timeout: float = 0.0) -> Optional[List[float]]:
-        """LSL'den son örneği çeker (varsa)."""
-        chunks, _ = self.inlet.pull_chunk(timeout=timeout)
+    def pull_latest(self, timeout: float = 0.0) -> Tuple[Optional[List[float]], Optional[float]]:
+        """LSL'den son örneği ve zaman damgasını çeker (varsa)."""
+        chunks, timestamps = self.inlet.pull_chunk(timeout=timeout)
         if chunks:
-            return chunks[-1]
-        return None
+            ts = timestamps[-1] if (timestamps and len(timestamps) > 0) else None
+            return chunks[-1], ts
+        return None, None
 
     def get_command(
         self,
@@ -195,22 +196,27 @@ class ControlReceiver:
     ) -> Dict[str, Any]:
         """En son kontrol sinyalini yorumlanmış komut formatında döner."""
         th = threshold if threshold is not None else self.threshold
-        sample = self.pull_latest(timeout=timeout)
+        sample, sample_ts = self.pull_latest(timeout=timeout)
 
         if sample is None and timeout > 0.0:
             start_t = time.perf_counter()
             while (time.perf_counter() - start_t) < timeout:
-                sample = self.pull_latest(timeout=min(0.05, timeout))
+                sample, sample_ts = self.pull_latest(timeout=min(0.05, timeout))
                 if sample is not None:
                     break
                 time.sleep(0.01)
 
-        now = time.perf_counter()
+        now = pylsl.local_clock()
         if sample is not None:
+            ts = sample_ts if (sample_ts is not None and sample_ts > 0.0) else now
             self._last_sample = sample
-            self._last_sample_time = now
-            active_sample = sample
-            is_stale = False
+            self._last_sample_time = ts
+            if (now - ts) <= self.stale_after:
+                active_sample = sample
+                is_stale = False
+            else:
+                active_sample = None
+                is_stale = True
         else:
             if self._last_sample is not None and (now - self._last_sample_time) <= self.stale_after:
                 active_sample = self._last_sample

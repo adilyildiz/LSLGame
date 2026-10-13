@@ -252,113 +252,86 @@ def test_calibration_app_filename_and_quality_check():
     assert all_ok is False
     assert any("C4" in w for w in warns)
 
-    # Hepsi yeşil olduğunda
+    # Hepsi yeşil ama impedans bilgisi yok -> kapı geçilmemeli
     app.quality_metrics["C4"]["status"] = "green"
+    all_ok, warns = app.check_motor_channels_quality()
+    assert all_ok is False
+    assert any("impedans bilgisi yok" in w for w in warns)
+
+    # Pilot kayıttaki gibi C3/C4 impedansı yüksek -> kapı geçilmemeli
+    app.initial_impedances = {"C3": {"value": 66900.0}, "Cz": {"value": 16300.0}, "C4": {"value": 67600.0}}
+    all_ok, warns = app.check_motor_channels_quality()
+    assert all_ok is False
+    assert any("C3" in w and "impedans" in w for w in warns)
+
+    # Kalite yeşil ve impedanslar kabul eşiğinin altında -> kapı geçilir
+    app.initial_impedances = {"C3": {"value": 18000.0}, "Cz": {"value": 16300.0}, "C4": {"value": 19000.0}}
     all_ok, warns = app.check_motor_channels_quality()
     assert all_ok is True
     assert len(warns) == 0
 
 
 def test_e2e_calibration_simulator_recording_and_alignment():
-    """Simülatörle Uçtan Uca (E2E) Kayıt ve Zaman Damgası Hizalama Testi (< 30 sn).
-
-    Doğrulamalar:
-    1. SyntheticEEGSource ve MarkerPublisher eşzamanlı çalışır.
-    2. Paradigma kısaltılmış sürelerle (fix 0.05s, cue 0.05s, img 0.1s, rest 0.05s) koşturulur.
-    3. Simülatör sınıfı ipucuna göre set_class ile değiştirilir.
-    4. Her imagery_start - imagery_end aralığında EEG örnekleri mevcuttur.
-    5. Marker sırası doğrulanır.
-    6. Deneme sayıları sınıflar arasında dengelidir.
-    7. PLAN Faz 3 çıkış kriteri: EEG ve Marker zaman damgaları aynı LSL saatindedir ve
-       hizalama farkı < 20 ms'dir (250 Hz için örnek aralığı 4 ms).
+    """K4 Gerçek Hizalama Testi:
+    1. sync_channel=True ile simülatör başlatılır.
+    2. En az 10 olayda zaman damgası ts = pylsl.local_clock() alınır, hemen ardından
+       set_class(...) çağrılır ve cue_* marker'ı timestamp=ts ile gönderilir.
+    3. Kaydedilen EEG'de BIP kanalındaki (indeks 7) basamağın ilk örneğinin zaman damgası bulunur.
+    4. Her olay için gecikme = basamak_ts - marker_ts.
+    5. Kabul: tüm olaylarda -4 ms <= gecikme <= 12 ms. EEG ardışık damga farkı en fazla 6 ms.
     """
     start_test_time = time.time()
+    unique_id = f"K4-ALIGN-{int(time.time() * 1000)}"
 
-    # 1. Simülatör ve MarkerPublisher başlat
-    unique_id = f"TEST-CALIB-{int(time.time() * 1000)}"
+    # 1. sync_channel=True ile simülatör başlat
     source = SyntheticEEGSource(
-        name=f"X.on-SIM-E2E-{unique_id}",
+        name=f"X.on-SIM-ALIGN-{unique_id}",
         srate=250.0,
         random_seed=42,
-        source_id=f"SIM-SOURCE-{unique_id}",
+        source_id=f"SIM-ALIGN-{unique_id}",
+        sync_channel=True,
     )
     source.start()
 
     marker_pub = MarkerPublisher(
-        stream_name=f"BCI_Markers_Test_{unique_id}",
-        source_id=f"MARKER-PUB-{unique_id}",
+        stream_name=f"BCI_Markers_Align_{unique_id}",
+        source_id=f"MARKER-ALIGN-{unique_id}",
     )
 
     # 2. LSL Inlet'leri aç ve bağlantının kurulduğunu garanti et
     eeg_streams = pylsl.resolve_byprop("source_id", source.source_id, timeout=3.0)
     assert eeg_streams, f"EEG akışı bulunamadı: {source.source_id}"
     eeg_inlet = pylsl.StreamInlet(eeg_streams[0], max_buflen=30)
-    eeg_inlet.open_stream(timeout=3.0)
+    eeg_inlet.open_stream(3.0)
 
     marker_streams = pylsl.resolve_byprop("source_id", marker_pub.stream_info.source_id(), timeout=3.0)
     assert marker_streams, f"Marker akışı bulunamadı: {marker_pub.stream_info.source_id()}"
     marker_inlet = pylsl.StreamInlet(marker_streams[0], max_buflen=30)
-    marker_inlet.open_stream(timeout=3.0)
+    marker_inlet.open_stream(3.0)
 
-    # 3. Kısaltılmış sürelerle durum makinesi
-    cfg = {
-        "timing": {
-            "fixation_sec": 0.05,
-            "cue_sec": 0.05,
-            "imagery_sec": 0.10,
-            "rest_min_sec": 0.05,
-            "rest_max_sec": 0.05,
-            "inter_run_pause_sec": 0.1,
-        },
-        "run": {
-            "trials_per_run": 6,
-            "max_consecutive_same_class": 3,
-        },
-        "profiles": {
-            "mi2": {
-                "classes": ["left", "right", "rest"],
-                "default_runs": 1,
-            }
-        },
-    }
+    time.sleep(0.15)
 
-    sm = CalibrationStateMachine(config=cfg, profile_name="mi2", n_runs=1, seed=777)
-
-    # 4. Paradigmayı koştur ve LSL marker'larını bas
-    t_start = pylsl.local_clock()
-    for m in sm.start_session(t_start):
-        marker_pub.push(m, timestamp=t_start)
-
-    for m in sm.start_run(t_start):
-        marker_pub.push(m, timestamp=t_start)
-
-    trials_seen_classes: List[str] = []
+    # 2. En az 10 olayda ts = pylsl.local_clock() -> set_class -> marker_pub.push
+    from src.simulation.synthetic_eeg import CLASS_CODES
+    test_sequence = [
+        "left", "rest", "right", "rest", "down", "rest",
+        "up", "rest", "left", "rest", "right", "rest",
+    ]
+    events_sent = []
 
     try:
-        while not sm.is_completed:
-            now_lsl = pylsl.local_clock()
-            if sm.should_transition(now_lsl):
-                # Bir sonraki aşamaya geç
-                stage, markers = sm.commit_transition(now_lsl)
-                for m in markers:
-                    marker_pub.push(m, timestamp=now_lsl)
+        for cls in test_sequence:
+            ts = pylsl.local_clock()
+            source.set_class(cls, timestamp=ts)
+            marker_name = f"cue_{cls}"
+            marker_pub.push(marker_name, timestamp=ts)
+            events_sent.append((marker_name, cls, ts))
+            time.sleep(0.08)
 
-                # İpucu veya imgeleme aşamasında simülatör durumunu güncelle
-                cls = sm.current_class
-                if stage == CalibrationStage.CUE and cls:
-                    source.set_class(cls)
-                    trials_seen_classes.append(cls)
-                elif stage == CalibrationStage.REST:
-                    source.set_class("rest")
-
-            # CPU'yu rahatlatmak için çok kısa bekle
-            time.sleep(0.01)
-
-        # Paradigma bittiğinde EEG veri üretimini durdur
+        time.sleep(0.25)
         source.stop()
-        time.sleep(0.05)
 
-        # 5. Kaydedilen EEG ve Marker verilerini çek
+        # Kaydedilen EEG ve Marker verilerini çek
         recorded_eeg_samples: List[List[float]] = []
         recorded_eeg_timestamps: List[float] = []
         while True:
@@ -375,48 +348,51 @@ def test_e2e_calibration_simulator_recording_and_alignment():
                 break
             recorded_markers.append((sample[0], ts))
 
-        # 6. Doğrulamalar:
-        # A) Marker listesi sırası ve bütünlüğü
-        marker_names = [m[0] for m in recorded_markers]
-        assert "session_start" in marker_names
-        assert "run_start" in marker_names
-        assert "run_end" in marker_names
-        assert "session_end" in marker_names
-        assert marker_names.count("trial_start") == 6
-        assert marker_names.count("imagery_start") == 6
-        assert marker_names.count("imagery_end") == 6
-        assert marker_names.count("trial_end") == 6
-
-        # B) Sınıf dengesi (6 deneme / 3 sınıf = her biri 2 deneme)
-        assert len(trials_seen_classes) == 6
-        assert trials_seen_classes.count("left") == 2
-        assert trials_seen_classes.count("right") == 2
-        assert trials_seen_classes.count("rest") == 2
-
-        # C) Her imagery_start - imagery_end aralığında EEG örnekleri var mı?
-        # D) Zaman damgası hizalama hatası < 20 ms (PLAN Faz 3 çıkış kriteri)
+        # Doğrulamalar
         eeg_ts_arr = np.array(recorded_eeg_timestamps)
+        eeg_data_arr = np.array(recorded_eeg_samples)
         assert len(eeg_ts_arr) > 100, f"Yetersiz EEG örneği: {len(eeg_ts_arr)}"
+        assert len(recorded_markers) == len(test_sequence)
 
-        imagery_start_times = [m[1] for m in recorded_markers if m[0] == "imagery_start"]
-        imagery_end_times = [m[1] for m in recorded_markers if m[0] == "imagery_end"]
+        # 5a. EEG ardışık damga farkı en fazla 6 ms
+        diffs_ms = np.diff(eeg_ts_arr) * 1000.0
+        max_diff = float(np.max(diffs_ms))
+        min_diff = float(np.min(diffs_ms))
+        assert max_diff <= 6.0, f"EEG ardışık damga farkı 6 ms'yi aştı: {max_diff:.2f} ms (min: {min_diff:.2f} ms)"
 
-        for trial_i, (t_img_start, t_img_end) in enumerate(zip(imagery_start_times, imagery_end_times)):
-            # Bu aralıktaki EEG örnekleri
-            mask = (eeg_ts_arr >= t_img_start) & (eeg_ts_arr <= t_img_end)
-            n_samples_in_interval = np.sum(mask)
+        # 3 & 4. BIP kanalındaki (indeks 7) basamağın ilk örneğinin zaman damgası ve gecikme hesabı
+        bip_channel = eeg_data_arr[:, 7]
+        latencies_ms = []
 
-            assert n_samples_in_interval > 0, (
-                f"Deneme {trial_i}: imagery_start ({t_img_start:.3f}) ile "
-                f"imagery_end ({t_img_end:.3f}) arasında hiç EEG örneği bulunamadı!"
+        for m_name, target_cls, marker_ts in events_sent:
+            target_code = CLASS_CODES[target_cls]
+            # m_ts etrafında arama penceresi [-20 ms, +60 ms]
+            win_mask = (eeg_ts_arr >= marker_ts - 0.02) & (eeg_ts_arr <= marker_ts + 0.06)
+            win_indices = np.where(win_mask)[0]
+
+            step_idx = None
+            for idx in win_indices:
+                if idx > 0 and bip_channel[idx] == target_code and bip_channel[idx - 1] != target_code:
+                    step_idx = idx
+                    break
+
+            assert step_idx is not None, f"Olay {m_name} (ts={marker_ts:.4f}) için BIP basamağı bulunamadı!"
+            basamak_ts = eeg_ts_arr[step_idx]
+            latency = (basamak_ts - marker_ts) * 1000.0
+            latencies_ms.append(latency)
+
+            # 5b. -4 ms <= gecikme <= 12 ms
+            assert -4.0 <= latency <= 12.0, (
+                f"Olay {m_name}: gecikme ({latency:.2f} ms) kabul sınırları [-4 ms, 12 ms] dışında!"
             )
 
-            # Zaman damgası hizalama kontrolü:
-            # En yakın EEG örneğinin zaman farkı (250 Hz'de örnekler her 4 ms'de bir gelir; maks jitter < 20 ms olmalı)
-            min_diff_start = np.min(np.abs(eeg_ts_arr - t_img_start))
-            assert min_diff_start < 0.020, (
-                f"Deneme {trial_i}: EEG ve marker zaman hizalama farkı 20 ms'yi aştı: {min_diff_start * 1000:.2f} ms"
-            )
+        print(
+            f"\n[K4 Hizalama Testi] Örnek Sayısı: {len(latencies_ms)} | "
+            f"Gecikme Min: {min(latencies_ms):.2f} ms | "
+            f"Ortalama: {np.mean(latencies_ms):.2f} ms | "
+            f"Maks: {max(latencies_ms):.2f} ms | "
+            f"Maks Ardışık Damga Farkı: {max_diff:.2f} ms"
+        )
 
     finally:
         source.stop()
