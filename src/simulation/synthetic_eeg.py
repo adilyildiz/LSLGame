@@ -61,14 +61,15 @@ IMPEDANCES = [
 class PinkNoiseGenerator:
     """Kellet filtresi kullanan gerçek zamanlı pembe gürültü (1/f) üreteci."""
 
-    def __init__(self, n_channels: int = 11):
+    def __init__(self, n_channels: int = 11, rng: Optional[np.random.Generator] = None):
         self.n_channels = n_channels
         self.b = np.zeros((n_channels, 7), dtype=np.float64)
+        self.rng = rng if rng is not None else np.random.default_rng()
 
     def generate(self, n_samples: int) -> np.ndarray:
         out = np.zeros((n_samples, self.n_channels), dtype=np.float64)
         for i in range(n_samples):
-            white = np.random.randn(self.n_channels)
+            white = self.rng.standard_normal(self.n_channels)
             self.b[:, 0] = 0.99886 * self.b[:, 0] + white * 0.0555179
             self.b[:, 1] = 0.99332 * self.b[:, 1] + white * 0.0750759
             self.b[:, 2] = 0.96900 * self.b[:, 2] + white * 0.1538520
@@ -142,16 +143,24 @@ class SyntheticEEGSource:
         name: str = "X.on-SIM-0000",
         srate: float = 250.0,
         chunk_size: int = 10,
+        erd_power_drop: float = 0.40,
+        random_seed: Optional[int] = None,
+        source_id: Optional[str] = None,
     ):
         self.name = name
         self.srate = float(srate)
         self.chunk_size = chunk_size
+        self.erd_power_drop = float(erd_power_drop)
+        self.erd_attenuation = float(np.sqrt(max(0.0, 1.0 - self.erd_power_drop)))
+        self.random_seed = random_seed
+        self.rng = np.random.default_rng(random_seed)
+        self.source_id = source_id or "SIM-0000 250"
         self.n_channels = len(CHANNEL_LABELS)
 
-        self.stream_info = create_xon_stream_info(name=self.name, srate=self.srate)
+        self.stream_info = create_xon_stream_info(name=self.name, srate=self.srate, source_id=self.source_id)
         self.outlet = pylsl.StreamOutlet(self.stream_info, chunk_size=self.chunk_size)
 
-        self.pink_noise = PinkNoiseGenerator(self.n_channels)
+        self.pink_noise = PinkNoiseGenerator(self.n_channels, rng=self.rng)
 
         # Durum değişkenleri
         self._class: str = "rest"
@@ -160,9 +169,9 @@ class SyntheticEEGSource:
         self._thread: Optional[threading.Thread] = None
 
         # Faz takipçileri
-        self._phase_mu = np.random.uniform(0, 2 * np.pi, self.n_channels)
-        self._phase_beta = np.random.uniform(0, 2 * np.pi, self.n_channels)
-        self._phase_50hz = np.random.uniform(0, 2 * np.pi, self.n_channels)
+        self._phase_mu = self.rng.uniform(0, 2 * np.pi, self.n_channels)
+        self._phase_beta = self.rng.uniform(0, 2 * np.pi, self.n_channels)
+        self._phase_50hz = self.rng.uniform(0, 2 * np.pi, self.n_channels)
 
         # Göz kırpma artefaktı durumu
         self._blink_samples_left = 0
@@ -224,9 +233,8 @@ class SyntheticEEGSource:
             7: 0.0,   # BIP (pilot kayıtta 0)
         }
 
-        # ERD kuralı: ~%40 güç düşüşü -> Genlik çarpanı sqrt(0.60) ≈ 0.7746
-        # Tespitin sağlam ve gürültüye dayanıklı olması için genlik çarpanı 0.60 (güçte ~%64 düşüş) kullanılır.
-        erd_attenuation = 0.60
+        # ERD kuralı: ~%40 güç düşüşü -> Genlik çarpanı sqrt(1 - erd_power_drop) ≈ 0.7746
+        erd_attenuation = self.erd_attenuation
 
         mu_scales = np.ones(self.n_channels, dtype=np.float32)
         if active_class == "left":
@@ -246,12 +254,12 @@ class SyntheticEEGSource:
         for ch in range(7):
             # Faz ilerlemesi
             phases_mu = self._phase_mu[ch] + np.cumsum(
-                np.full(n_samples, dt_mu) + np.random.randn(n_samples) * 0.02
+                np.full(n_samples, dt_mu) + self.rng.standard_normal(n_samples) * 0.02
             )
             self._phase_mu[ch] = phases_mu[-1] % (2 * np.pi)
 
             phases_beta = self._phase_beta[ch] + np.cumsum(
-                np.full(n_samples, dt_beta) + np.random.randn(n_samples) * 0.03
+                np.full(n_samples, dt_beta) + self.rng.standard_normal(n_samples) * 0.03
             )
             self._phase_beta[ch] = phases_beta[-1] % (2 * np.pi)
 
@@ -261,8 +269,9 @@ class SyntheticEEGSource:
             # 50 Hz şebeke gürültüsü (Cz hariç diğerlerinde biraz daha yüksek)
             amp_50 = 2.0 if ch == 3 else 8.0
 
-            amp_mu = base_mu_amp.get(ch, 10.0) * mu_scales[ch]
-            amp_beta = (amp_mu * 0.4)
+            b_mu = base_mu_amp.get(ch, 10.0)
+            amp_mu = b_mu * mu_scales[ch]
+            amp_beta = (b_mu * 0.4) * mu_scales[ch]
 
             data[:, ch] = (
                 pink[:, ch]
@@ -275,9 +284,9 @@ class SyntheticEEGSource:
         data[:, 7] = 0.0
 
         # İvmeölçer kanalları (8, 9, 10): Pilot ortalaması ~(-105, 806, -494) mg -> |g| ≈ 950 mg
-        data[:, 8] = -105.0 + np.random.randn(n_samples) * 2.0
-        data[:, 9] = 806.0 + np.random.randn(n_samples) * 2.0
-        data[:, 10] = -494.0 + np.random.randn(n_samples) * 2.0
+        data[:, 8] = -105.0 + self.rng.standard_normal(n_samples) * 2.0
+        data[:, 9] = 806.0 + self.rng.standard_normal(n_samples) * 2.0
+        data[:, 10] = -494.0 + self.rng.standard_normal(n_samples) * 2.0
 
         # Göz kırpma enjeksiyonu (F3 ve F4)
         if blink_left > 0:

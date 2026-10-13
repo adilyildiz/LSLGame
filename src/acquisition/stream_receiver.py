@@ -42,10 +42,12 @@ def find_xon_stream(
     timeout: float = 5.0,
     name_prefix: Optional[str] = None,
     stream_type: Optional[str] = None,
+    allow_simulator: bool = False,
 ) -> pylsl.StreamInfo:
     """Ağdaki LSL akışları arasından X.on EEG akışını bulur.
 
-    Eşleme kuralı: type == 'EEG' ve adı 'X.on' ile başlayan ilk akış.
+    Eşleme kuralı: type == 'EEG' ve adı 'X.on' ile başlayan akış.
+    allow_simulator=False ise adında '-SIM-' geçen simülatör akışları elenir.
     """
     if config is None:
         try:
@@ -58,21 +60,39 @@ def find_xon_stream(
 
     start_time = time.time()
     logger.info(
-        f"X.on akışı aranıyor (type='{expected_type}', name_prefix='{expected_prefix}', timeout={timeout}s)..."
+        f"X.on akışı aranıyor (type='{expected_type}', name_prefix='{expected_prefix}', "
+        f"allow_simulator={allow_simulator}, timeout={timeout}s)..."
     )
 
     while (time.time() - start_time) < timeout:
-        streams = pylsl.resolve_byprop("type", expected_type, timeout=min(1.0, timeout))
+        remaining = timeout - (time.time() - start_time)
+        wait_dur = min(0.5, max(0.1, remaining))
+        streams = pylsl.resolve_streams(wait_time=wait_dur)
+        matching: List[pylsl.StreamInfo] = []
         for info in streams:
-            if info.name().startswith(expected_prefix):
-                logger.info(
-                    f"X.on akışı bulundu: {info.name()} ({info.nominal_srate()} Hz, {info.channel_count()} kanal)"
+            name = info.name()
+            s_type = info.type()
+            if s_type == expected_type and name.startswith(expected_prefix):
+                if not allow_simulator and "-SIM-" in name:
+                    logger.debug(f"Simülatör akışı atlandı: {name}")
+                    continue
+                matching.append(info)
+
+        if matching:
+            if len(matching) > 1:
+                logger.warning(
+                    f"Birden fazla X.on akışı bulundu ({len(matching)} adet): "
+                    f"{[s.name() for s in matching]}. İlk eşleşen akış seçiliyor."
                 )
-                return info
+            chosen = matching[0]
+            logger.info(
+                f"X.on akışı bulundu: {chosen.name()} ({chosen.nominal_srate()} Hz, {chosen.channel_count()} kanal)"
+            )
+            return chosen
 
     raise TimeoutError(
-        f"X.on akışı bulunamadı (type='{expected_type}', prefix='{expected_prefix}'). "
-        f"Zaman aşımı ({timeout} sn)."
+        f"X.on akışı bulunamadı (type='{expected_type}', prefix='{expected_prefix}', "
+        f"allow_simulator={allow_simulator}). Zaman aşımı ({timeout} sn)."
     )
 
 
@@ -298,15 +318,29 @@ class XonStreamReceiver:
         config: Optional[Dict[str, Any]] = None,
         buffer_duration: float = 5.0,
         timeout: float = 5.0,
+        allow_simulator: bool = False,
+        source_id: Optional[str] = None,
     ):
         self.config = config or load_xon_config()
         self.buffer_duration = buffer_duration
 
         if stream_info is None:
-            stream_info = find_xon_stream(self.config, timeout=timeout)
+            if source_id is not None:
+                streams = pylsl.resolve_byprop("source_id", source_id, timeout=timeout)
+                if not streams:
+                    raise TimeoutError(f"source_id='{source_id}' ile X.on akışı bulunamadı ({timeout} sn).")
+                stream_info = streams[0]
+            else:
+                stream_info = find_xon_stream(self.config, timeout=timeout, allow_simulator=allow_simulator)
 
         self.stream_info = stream_info
         self.inlet = pylsl.StreamInlet(self.stream_info, max_buflen=int(buffer_duration + 5))
+        try:
+            self.inlet.open_stream(timeout=timeout)
+        except (pylsl.util.TimeoutError, pylsl.util.LostError, TimeoutError) as e:
+            raise TimeoutError(f"X.on akışına bağlanılamadı (zaman aşımı {timeout} sn): {e}") from e
+
+        self.is_simulator = "-SIM-" in self.stream_info.name()
         self.metadata = parse_xon_metadata(self.inlet)
 
         srate = self.metadata["nominal_srate"] or 250.0

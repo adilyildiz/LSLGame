@@ -34,30 +34,39 @@ def test_synthetic_eeg_metadata_and_streams():
 
 def test_synthetic_eeg_end_to_end_left_class_erd():
     """Uçtan uca test:
-    Sentetik EEG yayınla (sol sınıfı) -> Acquisition modülü alıp 2 sn veri biriktirsin ->
-    Sol sınıfında C4'ün 8–30 Hz gücü C3'ünkünden belirgin düşük olsun.
+    Sentetik EEG yayınla (sol sınıfı, %40 ERD, tohumlu) ->
+    Acquisition modülü source_id ile bağlanıp 4 sn veri biriktirsin ->
+    Sol sınıfında C4'ün 8–30 Hz gücü C3'ünkünden belirgin düşük olsun (C4/C3 < 0.85).
     """
-    source = SyntheticEEGSource(name="X.on-SIM-E2E", srate=250.0)
+    source = SyntheticEEGSource(
+        name="X.on-SIM-E2E",
+        srate=250.0,
+        erd_power_drop=0.40,
+        random_seed=42,
+        source_id="SIM-E2E-TEST",
+    )
     source.set_class("left")
     source.start()
 
+    # S2 uyarınca local stream_info yerine source_id ile bağlan
     receiver = XonStreamReceiver(
-        stream_info=source.stream_info,
-        buffer_duration=5.0,
+        source_id="SIM-E2E-TEST",
+        buffer_duration=6.0,
+        allow_simulator=True,
     )
     receiver.start(poll_interval=0.01)
 
     try:
-        # 2 saniyelik veri (500 örnek) birikene kadar bekle (en fazla 4 saniye)
+        # 4 saniyelik veri (1000 örnek) birikene kadar bekle (en fazla 7 saniye)
         start_wait = time.time()
-        while not receiver.ring_buffer.is_ready(2.0):
+        while not receiver.ring_buffer.is_ready(4.0):
             time.sleep(0.05)
-            if time.time() - start_wait > 5.0:
-                pytest.fail("2 saniyelik veri biriktirilemedi, zaman aşımı.")
+            if time.time() - start_wait > 7.0:
+                pytest.fail("4 saniyelik veri biriktirilemedi, zaman aşımı.")
 
-        # 2 saniyelik pencereyi çek
-        data, timestamps = receiver.ring_buffer.get_latest_window(2.0)
-        assert data.shape == (500, 11), f"Beklenen (500, 11), alınan: {data.shape}"
+        # 4 saniyelik pencereyi çek (1000 örnek)
+        data, timestamps = receiver.ring_buffer.get_latest_window(4.0)
+        assert data.shape == (1000, 11), f"Beklenen (1000, 11), alınan: {data.shape}"
 
         # Kanal indeksleri: C3 -> 2, C4 -> 4
         c3_sig = data[:, 2]
@@ -67,14 +76,14 @@ def test_synthetic_eeg_end_to_end_left_class_erd():
         p_c3 = _compute_band_power(c3_sig, fs=250.0, low=8.0, high=30.0)
         p_c4 = _compute_band_power(c4_sig, fs=250.0, low=8.0, high=30.0)
 
-        # 'left' sınıfında kontralateral ERD sebebiyle C4 gücü C3'ten belirgin düşük olmalı
-        # Güç düşüşü hedefi: en az %25 - %40 daha düşük
+        # 'left' sınıfında kontralateral ERD sebebiyle C4 gücü C3'ten düşük olmalı
         power_ratio = p_c4 / p_c3
         assert p_c4 < p_c3, (
             f"C4 gücü ({p_c4:.2f}) C3 gücünden ({p_c3:.2f}) düşük değil! Oran: {power_ratio:.3f}"
         )
-        assert power_ratio <= 0.80, (
-            f"C4 gücündeki düşüş belirgin değil. C4/C3 oranı: {power_ratio:.3f} (beklenen <= 0.80)"
+        # Şartname: C4/C3 8–30 Hz güç oranı < 0.85 olmalı
+        assert power_ratio < 0.85, (
+            f"C4 gücündeki düşüş beklenen eşiği (< 0.85) sağlamadı. C4/C3 oranı: {power_ratio:.3f}"
         )
 
     finally:

@@ -142,21 +142,44 @@ class ControlReceiver:
         stream_info: Optional[pylsl.StreamInfo] = None,
         timeout: float = 5.0,
         threshold: float = 0.5,
+        stale_after: float = 0.3,
+        source_id: Optional[str] = None,
     ):
         self.threshold = float(threshold)
+        self.stale_after = float(stale_after)
+        self._last_sample: Optional[List[float]] = None
+        self._last_sample_time: float = 0.0
+
         if stream_info is None:
-            streams = pylsl.resolve_byprop("name", STREAM_NAME, timeout=timeout)
+            if source_id is not None:
+                streams = pylsl.resolve_byprop("source_id", source_id, timeout=timeout)
+            else:
+                streams = pylsl.resolve_byprop("name", STREAM_NAME, timeout=timeout)
+                if not streams:
+                    # Type ile arama alternatifi
+                    streams = pylsl.resolve_byprop("type", STREAM_TYPE, timeout=timeout)
             if not streams:
-                # Type ile arama alternatifi
-                streams = pylsl.resolve_byprop("type", STREAM_TYPE, timeout=timeout)
-            if not streams:
-                raise TimeoutError(f"'{STREAM_NAME}' LSL akışı bulunamadı (zaman aşımı {timeout} sn).")
+                target_desc = f"source_id='{source_id}'" if source_id else f"name='{STREAM_NAME}'"
+                raise TimeoutError(f"'{STREAM_NAME}' LSL akışı bulunamadı ({target_desc}, zaman aşımı {timeout} sn).")
             stream_info = streams[0]
 
         self.stream_info = stream_info
         self.inlet = pylsl.StreamInlet(self.stream_info, max_buflen=10)
+        try:
+            self.inlet.open_stream(timeout=timeout)
+        except (pylsl.util.TimeoutError, pylsl.util.LostError, TimeoutError) as e:
+            raise TimeoutError(f"BCI_Control akışına bağlanılamadı (zaman aşımı {timeout} sn): {e}") from e
+
         self.mode = identify_control_mode(self.stream_info)
-        logger.info(f"BCI_Control akışına bağlandı. Mod: {self.mode.value}")
+        name_str = self.stream_info.name() if hasattr(self.stream_info, "name") else ""
+        src_str = self.stream_info.source_id() if hasattr(self.stream_info, "source_id") else ""
+        self.is_simulator = bool(
+            "-SIM-" in name_str
+            or "-SIM-" in src_str
+            or "SIM" in src_str.upper()
+            or "KEYBOARD" in src_str.upper()
+        )
+        logger.info(f"BCI_Control akışına bağlandı. Mod: {self.mode.value}, Simülatör: {self.is_simulator}")
 
     def pull_latest(self, timeout: float = 0.0) -> Optional[List[float]]:
         """LSL'den son örneği çeker (varsa)."""
@@ -182,22 +205,37 @@ class ControlReceiver:
                     break
                 time.sleep(0.01)
 
+        now = time.perf_counter()
+        if sample is not None:
+            self._last_sample = sample
+            self._last_sample_time = now
+            active_sample = sample
+            is_stale = False
+        else:
+            if self._last_sample is not None and (now - self._last_sample_time) <= self.stale_after:
+                active_sample = self._last_sample
+                is_stale = False
+            else:
+                active_sample = None
+                is_stale = True
+
         result: Dict[str, Any] = {
             "mode": self.mode.value,
-            "has_signal": sample is not None,
-            "raw": sample,
+            "has_signal": (not is_stale) and (active_sample is not None),
+            "raw": active_sample,
             "direction": Direction.REST.value,
             "confidence": 0.0,
             "vx": 0.0,
             "vy": 0.0,
+            "is_simulator": self.is_simulator,
         }
 
-        if sample is None:
+        if active_sample is None or is_stale:
             return result
 
         if self.mode == ControlMode.DISCRETE:
             # sample: [p_left, p_right, p_up, p_down, p_rest]
-            probs = np.array(sample, dtype=np.float32)
+            probs = np.array(active_sample, dtype=np.float32)
             max_idx = int(np.argmax(probs))
             max_p = float(probs[max_idx])
             dirs = [
@@ -228,8 +266,8 @@ class ControlReceiver:
 
         else:
             # Sürekli mod: sample = [vx, vy]
-            vx = float(sample[0])
-            vy = float(sample[1]) if len(sample) > 1 else 0.0
+            vx = float(active_sample[0])
+            vy = float(active_sample[1]) if len(active_sample) > 1 else 0.0
             result["vx"] = vx
             result["vy"] = vy
             mag = float(np.hypot(vx, vy))

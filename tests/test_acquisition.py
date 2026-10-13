@@ -3,7 +3,13 @@
 import numpy as np
 import pylsl
 import pytest
-from src.acquisition.stream_receiver import XonRingBuffer, parse_xon_metadata
+from src.acquisition.stream_receiver import (
+    XonRingBuffer,
+    XonStreamReceiver,
+    find_xon_stream,
+    parse_xon_metadata,
+)
+from src.simulation.synthetic_eeg import SyntheticEEGSource
 
 
 def test_ring_buffer_basic():
@@ -120,3 +126,46 @@ def test_parse_xon_metadata():
     assert meta["filters"][0]["value"] == 0.5
     assert "C3" in meta["impedances"]
     assert meta["impedances"]["C3"]["value"] == 16300.0
+
+
+def test_find_xon_stream_allow_simulator():
+    """S5 Testi:
+    find_xon_stream allow_simulator=False iken -SIM- içeren akışları atlamalı,
+    allow_simulator=True iken bulmalı.
+    """
+    import time
+
+    source = SyntheticEEGSource(name="X.on-SIM-CHECK5", source_id="SIM-CHECK5-ID")
+    time.sleep(0.3)
+
+    # 1. allow_simulator=False iken simülatör elenmeli ve zaman aşımına uğramalı
+    with pytest.raises(TimeoutError):
+        find_xon_stream(name_prefix="X.on", timeout=1.0, allow_simulator=False)
+
+    # 2. allow_simulator=True iken simülatör bulunmalı
+    info = find_xon_stream(name_prefix="X.on", timeout=2.0, allow_simulator=True)
+    assert info is not None
+    assert "-SIM-" in info.name()
+
+    # 3. XonStreamReceiver is_simulator bayrağı True olmalı
+    receiver = XonStreamReceiver(source_id="SIM-CHECK5-ID", allow_simulator=True)
+    assert receiver.is_simulator is True
+    receiver.close()
+
+
+def test_find_xon_stream_multiple_matches_warning(caplog):
+    """S5 Testi:
+    Birden fazla X.on akışı mevcut olduğunda uyarı loglanmalı.
+    """
+    import logging
+    import time
+
+    src1 = SyntheticEEGSource(name="X.on-SIM-MULTI1", source_id="MULTI1")
+    src2 = SyntheticEEGSource(name="X.on-SIM-MULTI2", source_id="MULTI2")
+    time.sleep(0.3)
+
+    with caplog.at_level(logging.WARNING):
+        info = find_xon_stream(name_prefix="X.on", timeout=2.0, allow_simulator=True)
+        assert info is not None
+
+    assert any("Birden fazla X.on akışı bulundu" in record.message for record in caplog.records)
