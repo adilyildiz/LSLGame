@@ -50,6 +50,14 @@ UI_STRINGS: Dict[str, str] = {
 }
 
 
+# HUD yerleşimi: 1. satır istatistik (sol) + komut (sağ), 2. satır hedef (sol) + simülasyon (sağ),
+# yön göstergesi bunların altında ortada; böylece metinler üst üste binmez.
+HUD_MARGIN = 20
+HUD_ROW1_Y = 14
+HUD_ROW2_Y = 46
+CUE_CENTER_Y = 115
+
+
 def get_system_font(size: int, bold: bool = False) -> Any:
     """Türkçe karakterleri destekleyen bir sistem yazı tipi yükler.
 
@@ -523,8 +531,8 @@ class BallRollGame:
                     misses=self.logic.misses,
                     accuracy=self.logic.accuracy,
                 )
-                hud_surf = font_large.render(hud_text, True, (240, 240, 240))
-                screen.blit(hud_surf, (30, 20))
+                hud_surf = font.render(hud_text, True, (240, 240, 240))
+                screen.blit(hud_surf, (HUD_MARGIN, HUD_ROW1_Y))
 
                 if self.logic.state == "active":
                     target_info = (
@@ -535,7 +543,7 @@ class BallRollGame:
                     t_surf = font.render(target_info, True, target_color)
                 else:
                     t_surf = font.render("Mola / Dinlenme", True, (140, 140, 150))
-                screen.blit(t_surf, (30, 60))
+                screen.blit(t_surf, (HUD_MARGIN, HUD_ROW2_Y))
 
                 # BCI Komut ve Durum Bilgisi (Sağ üst)
                 has_signal = cmd.get("has_signal", False) if self.receiver else False
@@ -557,13 +565,13 @@ class BallRollGame:
                         cmd_color = (140, 140, 140)
                     control_info = f"{UI_STRINGS['cmd_prefix']}{tr_dir} (%{conf_val * 100:.0f})"
                     c_surf = font.render(control_info, True, cmd_color)
-                screen.blit(c_surf, (self.width - 320, 20))
+                screen.blit(c_surf, c_surf.get_rect(topright=(self.width - HUD_MARGIN, HUD_ROW1_Y)))
 
                 # Simülasyon göstergesi
                 is_sim = cmd.get("is_simulator", False) or getattr(self.receiver, "is_simulator", False)
                 if is_sim:
                     sim_surf = font.render(f"[ {UI_STRINGS['simulation']} ]", True, (255, 190, 60))
-                    screen.blit(sim_surf, (self.width - 320, 50))
+                    screen.blit(sim_surf, sim_surf.get_rect(topright=(self.width - HUD_MARGIN, HUD_ROW2_Y)))
 
                 # Hedef Yön Oku ve Geri Bildirim (Üst Orta)
                 if self.logic.state == "pause":
@@ -579,17 +587,17 @@ class BallRollGame:
                             fb_text = UI_STRINGS["feedback_timeout"]
                             fb_color = (240, 70, 70)
                         fb_surf = font_large.render(fb_text, True, fb_color)
-                        screen.blit(fb_surf, fb_surf.get_rect(center=(self.width // 2, 70)))
+                        screen.blit(fb_surf, fb_surf.get_rect(center=(self.width // 2, CUE_CENTER_Y)))
                     else:
                         rest_surf = font.render(UI_STRINGS["pause_rest"], True, (150, 150, 160))
-                        screen.blit(rest_surf, rest_surf.get_rect(center=(self.width // 2, 70)))
+                        screen.blit(rest_surf, rest_surf.get_rect(center=(self.width // 2, CUE_CENTER_Y)))
                 else:
                     # Aktif deneme: ok ve yön yönergesi çiz
                     draw_target_cue(
                         screen=screen,
                         font=font_large,
                         center_x=self.width // 2,
-                        center_y=70,
+                        center_y=CUE_CENTER_Y,
                         target_side=self.logic.target_side,
                         color=target_color,
                     )
