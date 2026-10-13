@@ -5,3 +5,7 @@ pyxdf
 pyyaml
 pygame-ce
 pytest
+scikit-learn
+pyriemann
+matplotlib
+joblib
