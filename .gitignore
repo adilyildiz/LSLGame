@@ -1,0 +1,7 @@
+*.xdf
+data/
+models/
+logs/
+.venv/
+__pycache__/
+*.pyc
