@@ -135,16 +135,18 @@ class MarkerPublisher:
         self.outlet = pylsl.StreamOutlet(self.stream_info)
         self.history: List[Tuple[str, float]] = []
 
-    def push(self, marker_name: str) -> None:
+    def push(self, marker_name: str, timestamp: Optional[float] = None) -> float:
         """ASCII marker adını yayınlar."""
         # Yalnızca ASCII kontrolü
         if not marker_name.isascii():
             raise ValueError(f"Marker ismi yalnızca ASCII karakter içerebilir: '{marker_name}'")
 
-        timestamp = pylsl.local_clock()
+        if timestamp is None:
+            timestamp = pylsl.local_clock()
         self.outlet.push_sample([marker_name], timestamp)
         self.history.append((marker_name, timestamp))
         logger.info(f"BCI Marker: {marker_name} @ {timestamp:.3f}")
+        return timestamp
 
 
 class BallRollGameLogic:

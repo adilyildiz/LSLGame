@@ -181,12 +181,21 @@ class SyntheticEEGSource:
     def set_class(self, class_name: str) -> None:
         """Aktif zihinsel durumu değiştirir ('left', 'right', 'up', 'down', 'rest')."""
         class_name = class_name.lower().strip()
+        # Kalibrasyon profilleri için sınıf eşlemeleri
+        aliases = {
+            "feet": "down",
+            "foot": "down",
+            "both_hands": "up",
+            "both": "up",
+            "arithmetic": "rest",
+        }
+        resolved = aliases.get(class_name, class_name)
         valid = {"left", "right", "up", "down", "rest"}
-        if class_name not in valid:
+        if resolved not in valid:
             raise ValueError(f"Geçersiz sınıf: {class_name}. Geçerli olanlar: {valid}")
         with self._lock:
-            self._class = class_name
-            logger.info(f"Sentetik EEG sınıfı güncellendi: {class_name}")
+            self._class = resolved
+            logger.info(f"Sentetik EEG sınıfı güncellendi: {class_name} (dahili: {resolved})")
 
     @property
     def current_class(self) -> str:

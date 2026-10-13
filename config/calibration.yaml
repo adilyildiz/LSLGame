@@ -1,0 +1,67 @@
+# Graz-BCI Kalibrasyon Protokolü Yapılandırması
+# PLAN.md Faz 3 (3.1-3.5) ve Bölüm 20 uyarınca hazırlanmıştır.
+
+timing:
+  fixation_sec: 2.0
+  cue_sec: 1.0
+  imagery_sec: 4.0
+  rest_min_sec: 1.5
+  rest_max_sec: 3.0
+  inter_run_pause_sec: 60.0
+
+run:
+  trials_per_run: 20
+  max_consecutive_same_class: 3
+
+profiles:
+  mi2:
+    description: "2-sınıf temel motor imgeleme (Sol el, Sağ el, Dinlenme)"
+    classes:
+      - "left"
+      - "right"
+      - "rest"
+    default_runs: 4
+  mi3:
+    description: "3-sınıf genişletilmiş motor imgeleme (+ Ayak)"
+    classes:
+      - "left"
+      - "right"
+      - "rest"
+      - "feet"
+    default_runs: 6
+  mi5:
+    description: "5-sınıf tam motor imgeleme (+ İki el, + Aritmetik)"
+    classes:
+      - "left"
+      - "right"
+      - "rest"
+      - "feet"
+      - "both_hands"
+      - "arithmetic"
+    default_runs: 10
+
+quality_gate:
+  window_sec: 5.0
+  min_green_channels: 3
+  critical_channels:
+    - "C3"
+    - "Cz"
+    - "C4"
+
+display:
+  window_width: 1024
+  window_height: 768
+  fullscreen: false
+  bg_color: [20, 20, 20]
+  cross_color: [240, 240, 240]
+  cue_color: [0, 220, 255]
+  text_color: [240, 240, 240]
+  warning_color: [255, 80, 80]
+  success_color: [80, 240, 80]
+  cross_size: 40
+  cross_thickness: 4
+
+recording:
+  stream_name_markers: "BCI_Markers"
+  stream_source_id_markers: "Calibration_Markers"
+  filename_template: "data/{subject}/{session}/{subject}_{session}_task-MI_run-{run:02d}.xdf"
