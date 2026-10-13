@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from src.processing.filters import filter_eeg
+from src.processing.filters import apply_bandpass, apply_notch, filter_eeg
 from src.processing.recording import Recording
 
 logger = logging.getLogger(__name__)
@@ -100,18 +100,30 @@ def extract_epochs(
     ch_names = recording.ch_names
     markers = recording.markers
 
-    # Sürekli EEG'yi filtrele (uç etkilerini önlemek için epoklamadan önce)
-    if filter_mode is not None:
-        filtered_eeg = filter_eeg(
+    # 1. Ham veriye çentik filtresi uygula (50/100 Hz şebeke gürültüsü temizlenir, ancak bant geçiren uygulanmaz)
+    # raw_data yalnızca 50/100 Hz çentikten geçmiş olmalıdır (D2 düzeltmesi)
+    notch_mode = filter_mode if filter_mode is not None else "causal"
+    if notch_freqs:
+        raw_eeg_notched = apply_notch(
             eeg,
+            srate=srate,
+            freqs=notch_freqs,
+            mode=notch_mode,
+        )
+    else:
+        raw_eeg_notched = np.array(eeg, copy=True, dtype=np.float64)
+
+    # 2. Sürekli EEG'yi bant geçiren filtreden geçir
+    if filter_mode is not None:
+        filtered_eeg = apply_bandpass(
+            raw_eeg_notched,
             srate=srate,
             f_low=f_low,
             f_high=f_high,
-            notch_freqs=notch_freqs,
             mode=filter_mode,
         )
     else:
-        filtered_eeg = np.array(eeg, copy=True)
+        filtered_eeg = np.array(raw_eeg_notched, copy=True)
 
     # Denemeleri marker listesinden eşleştir
     # Her imagery_start'tan hemen önce gelen cue_* marker'ı etiketi belirler
@@ -157,7 +169,7 @@ def extract_epochs(
             elif len(chunk) > expected_len:
                 chunk = chunk[:expected_len]
 
-            raw_chunk = eeg[idx_start:idx_end]
+            raw_chunk = raw_eeg_notched[idx_start:idx_end]
             if len(raw_chunk) < expected_len:
                 pad = np.zeros((expected_len - len(raw_chunk), raw_chunk.shape[1]), dtype=raw_chunk.dtype)
                 raw_chunk = np.vstack([raw_chunk, pad])

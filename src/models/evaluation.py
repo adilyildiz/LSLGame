@@ -56,6 +56,19 @@ def compute_itr(accuracy: float, n_classes: int, trial_duration_sec: float = 7.0
     return max(0.0, float(b * (60.0 / trial_duration_sec)))
 
 
+def permute_labels_within_runs(
+    labels: np.ndarray,
+    run_indices: np.ndarray,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Etiketleri run sınırları içinde karıştırır (run yapısını korur)."""
+    y_perm = np.array(labels, copy=True)
+    for r in np.unique(run_indices):
+        mask = (run_indices == r)
+        y_perm[mask] = rng.permutation(y_perm[mask])
+    return y_perm
+
+
 def evaluate_session_cv(
     pipelines: Dict[str, Pipeline],
     epochs: Epochs,
@@ -68,7 +81,7 @@ def evaluate_session_cv(
 
     GroupKFold kullanılır (grup = run_indices).
     Her model için doğruluk, dengeli doğruluk, kappa, karışıklık matrisi ve ITR hesaplanır.
-    Permütasyon testiyle şans seviyesi doğrulanır.
+    Maksimum istatistik permütasyon testiyle model seçimi yanlılığı giderilmiş şans seviyesi doğrulanır.
     """
     X = epochs.data  # (n_epochs, n_times, n_channels)
     y = epochs.labels
@@ -85,6 +98,7 @@ def evaluate_session_cv(
         raise ValueError(f"En az 2 farklı run gereklidir, bulunan: {len(unique_runs)}")
 
     gkf = GroupKFold(n_splits=n_splits)
+    splits = list(gkf.split(X, y, groups=groups))
 
     results: Dict[str, Any] = {
         "models": {},
@@ -101,7 +115,7 @@ def evaluate_session_cv(
         oof_preds = np.empty_like(y)
         fold_accuracies = []
 
-        for train_idx, test_idx in gkf.split(X, y, groups=groups):
+        for train_idx, test_idx in splits:
             fold_pipe = clone(pipe)
             fold_pipe.fit(X[train_idx], y[train_idx])
             preds = fold_pipe.predict(X[test_idx])
@@ -132,31 +146,56 @@ def evaluate_session_cv(
     results["best_model"] = best_model_name
     results["best_accuracy"] = best_acc
 
-    # Permütasyon Testi (Şans seviyesi ve p-değeri)
-    if n_permutations > 0 and best_model_name in pipelines:
-        target_pipe = pipelines[best_model_name]
+    # Permütasyon Testi (Maksimum İstatistik Permütasyonu - D4)
+    if n_permutations > 0 and len(pipelines) > 0:
         rng = np.random.default_rng(seed)
-        perm_accs = np.zeros(n_permutations, dtype=np.float64)
+        model_perm_accs: Dict[str, np.ndarray] = {
+            name: np.zeros(n_permutations, dtype=np.float64) for name in pipelines
+        }
+        max_perm_accs = np.zeros(n_permutations, dtype=np.float64)
 
         for b in range(n_permutations):
-            y_perm = rng.permutation(y)
-            perm_preds = np.empty_like(y)
-            for train_idx, test_idx in gkf.split(X, y_perm, groups=groups):
-                fold_p = clone(target_pipe)
-                fold_p.fit(X[train_idx], y_perm[train_idx])
-                perm_preds[test_idx] = fold_p.predict(X[test_idx])
-            perm_accs[b] = accuracy_score(y_perm, perm_preds)
+            # Etiketler run içinde karıştırılır (run yapısı korunur)
+            y_perm = permute_labels_within_runs(y, groups, rng)
 
-        p_value = float(np.sum(perm_accs >= best_acc) + 1) / float(n_permutations + 1)
-        chance_95 = float(np.percentile(perm_accs, 95))
+            b_accs = []
+            for name, pipe in pipelines.items():
+                oof_perm = np.empty_like(y_perm)
+                for train_idx, test_idx in splits:
+                    fold_p = clone(pipe)
+                    fold_p.fit(X[train_idx], y_perm[train_idx])
+                    oof_perm[test_idx] = fold_p.predict(X[test_idx])
+                perm_acc = float(accuracy_score(y_perm, oof_perm))
+                model_perm_accs[name][b] = perm_acc
+                b_accs.append(perm_acc)
+
+            max_perm_accs[b] = max(b_accs)
+
+        # 1. Model seçimi düzeltilmiş p-değeri (maksimum istatistik permütasyonu)
+        selection_corrected_p = float(np.sum(max_perm_accs >= best_acc) + 1) / float(n_permutations + 1)
+        selection_corrected_chance_95 = float(np.percentile(max_perm_accs, 95))
+
+        # 2. Her model için kendi düzeltilmemiş p-değeri
+        model_p_values: Dict[str, float] = {}
+        for name in pipelines:
+            obs_m_acc = results["models"][name]["accuracy"]
+            m_p = float(np.sum(model_perm_accs[name] >= obs_m_acc) + 1) / float(n_permutations + 1)
+            results["models"][name]["p_value"] = m_p
+            results["models"][name]["chance_level_95"] = float(np.percentile(model_perm_accs[name], 95))
+            model_p_values[name] = m_p
 
         results["permutation_test"] = {
             "model": best_model_name,
-            "p_value": p_value,
-            "chance_level_95": chance_95,
-            "perm_mean": float(np.mean(perm_accs)),
-            "perm_std": float(np.std(perm_accs)),
+            "best_model": best_model_name,
+            "selection_corrected_p_value": selection_corrected_p,
+            "selection_corrected_chance_95": selection_corrected_chance_95,
+            "max_perm_mean": float(np.mean(max_perm_accs)),
+            "max_perm_std": float(np.std(max_perm_accs)),
+            "model_p_values": model_p_values,
             "n_permutations": n_permutations,
+            # Geriye dönük uyumluluk
+            "p_value": selection_corrected_p,
+            "chance_level_95": selection_corrected_chance_95,
         }
 
     return results

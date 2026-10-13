@@ -284,7 +284,9 @@ def check_emg_confound(
 ) -> Tuple[float, bool, str, Dict[str, Any]]:
     """30-45 Hz bandında sınıflar arası güç farkını permütasyon testiyle denetler.
 
-    PLAN 4.2 uyarınca:
+    PLAN 4.2 ve Görev 07 (D2) uyarınca:
+    EMG kontrolü bant geçiren filtreden geçmiş epochs.data yerine, yalnızca
+    50/100 Hz çentikten geçmiş geniş bantlı epochs.raw_data üzerinde çalışır.
     Eğer 30-45 Hz kas (EMG) bandında sınıflar arası fark istatistiksel olarak
     anlamlıysa (p < 0.05), sınıflandırma başarısının beyin ritminden değil kas
     aktivitesinden kaynaklandığını belirten açık bir UYARI üretir.
@@ -295,9 +297,13 @@ def check_emg_confound(
     - warning_msg: Uyarı mesajı metni
     - details: Sayısal istatistikler
     """
+    if epochs.raw_data is None:
+        raise ValueError("EMG kontrolü için Epochs.raw_data gereklidir (raw_data None olamaz).")
+
     srate = epochs.srate
-    data = epochs.data  # (n_epochs, n_times, n_channels)
+    data = epochs.raw_data  # (n_epochs, n_times, n_channels)
     labels = epochs.labels
+    ch_names = epochs.ch_names
     unique_classes = sorted(list(set(labels)))
 
     if len(unique_classes) < 2:
@@ -311,19 +317,26 @@ def check_emg_confound(
     high = min(nyq - 0.5, fmax)
     sos = signal.butter(3, [fmin / nyq, high / nyq], btype="bandpass", output="sos")
 
-    n_epochs = len(epochs)
-    emg_powers = np.zeros(n_epochs, dtype=np.float64)
+    n_epochs, n_times, n_channels = data.shape
+    emg_powers = np.zeros((n_epochs, n_channels), dtype=np.float64)
 
     for i in range(n_epochs):
         filt = signal.sosfilt(sos, data[i], axis=0)
-        # Tüm kanallar üzerinden ortalama log-güç
-        emg_powers[i] = np.log(np.mean(np.var(filt, axis=0)) + 1e-12)
+        # Kanal bazında log-güç
+        emg_powers[i] = np.log(np.var(filt, axis=0) + 1e-12)
 
-    # Gözlenen test istatistiği: One-way ANOVA F değeri
-    groups_obs = [emg_powers[labels == c] for c in unique_classes]
-    f_obs, _ = stats.f_oneway(*groups_obs)
-    if not np.isfinite(f_obs):
-        f_obs = 0.0
+    def _calc_max_f(lbls: np.ndarray) -> float:
+        max_f = 0.0
+        for ch in range(n_channels):
+            groups = [emg_powers[lbls == c, ch] for c in unique_classes if np.sum(lbls == c) > 0]
+            if len(groups) > 1:
+                f_val, _ = stats.f_oneway(*groups)
+                if np.isfinite(f_val) and f_val > max_f:
+                    max_f = float(f_val)
+        return max_f
+
+    # Gözlenen test istatistiği: Kanallar arası maksimum One-way ANOVA F değeri
+    f_obs = _calc_max_f(labels)
 
     # Permütasyon testi
     rng = np.random.default_rng(seed)
@@ -332,9 +345,7 @@ def check_emg_confound(
     perm_labels = np.array(labels, copy=True)
     for b in range(n_permutations):
         rng.shuffle(perm_labels)
-        groups_perm = [emg_powers[perm_labels == c] for c in unique_classes]
-        f_perm, _ = stats.f_oneway(*groups_perm)
-        perm_f[b] = f_perm if np.isfinite(f_perm) else 0.0
+        perm_f[b] = _calc_max_f(perm_labels)
 
     p_value = float(np.sum(perm_f >= f_obs) + 1) / float(n_permutations + 1)
     has_warning = bool(p_value < 0.05)
@@ -352,11 +363,13 @@ def check_emg_confound(
             f"(p={p_value:.4f}, F={f_obs:.2f}). Kas karıştırıcısı riski düşük."
         )
 
+    # Ortalama log-güçler (tüm kanallar üzerinden özet)
+    mean_powers_across_channels = np.mean(emg_powers, axis=1)
     details = {
         "p_value": p_value,
         "f_stat": float(f_obs),
         "f_perm_95": float(np.percentile(perm_f, 95)),
-        "class_means": {c: float(np.mean(emg_powers[labels == c])) for c in unique_classes},
+        "class_means": {c: float(np.mean(mean_powers_across_channels[labels == c])) for c in unique_classes},
         "has_warning": has_warning,
     }
 

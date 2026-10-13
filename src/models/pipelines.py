@@ -225,18 +225,17 @@ class CSP(BaseEstimator, TransformerMixin):
 class FilterBankCSP(BaseEstimator, TransformerMixin):
     """Filtre Bankası CSP (FBCSP).
 
-    Alt bantlar: 4-8, 8-12, 12-16, 16-20, 20-24, 24-28, 26-30 Hz.
+    Alt bantlar: 8-12, 12-16, 16-20, 20-24, 24-28, 28-30 Hz (ön filtre aralığı içinde).
     Her bant için ayrı CSP modeller ve öznitelikleri birleştirir.
     """
 
-    DEFAULT_BANDS = [
-        (4.0, 8.0),
+    DEFAULT_BANDS: List[Tuple[float, float]] = [
         (8.0, 12.0),
         (12.0, 16.0),
         (16.0, 20.0),
         (20.0, 24.0),
         (24.0, 28.0),
-        (26.0, 30.0),
+        (28.0, 30.0),
     ]
 
     def __init__(
@@ -244,10 +243,12 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
         srate: float = 250.0,
         n_components: int = 4,
         bands: Optional[Sequence[Tuple[float, float]]] = None,
+        pre_filter_range: Tuple[float, float] = (8.0, 30.0),
     ):
         self.srate = srate
         self.n_components = n_components
         self.bands = bands
+        self.pre_filter_range = pre_filter_range
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> FilterBankCSP:
         X = np.asarray(X, dtype=np.float64)
@@ -256,6 +257,16 @@ class FilterBankCSP(BaseEstimator, TransformerMixin):
         self.csp_models_ = []
         band_list = list(self.bands) if self.bands is not None else self.DEFAULT_BANDS
         nyq = 0.5 * self.srate
+
+        # Ön filtre aralığı kontrolü
+        if self.pre_filter_range is not None:
+            pf_low, pf_high = self.pre_filter_range
+            for f_low, f_high in band_list:
+                if f_low < pf_low - 1e-3 or f_high > pf_high + 1e-3:
+                    logger.warning(
+                        f"FBCSP alt bandı ({f_low}, {f_high}) Hz ön filtre aralığı "
+                        f"[{pf_low}, {pf_high}] Hz dışında kalıyor!"
+                    )
 
         for f_low, f_high in band_list:
             low = max(0.1, f_low) / nyq
@@ -327,11 +338,16 @@ def build_m2_csp(n_components: int = 4) -> Pipeline:
     ])
 
 
-def build_m3_fbcsp(srate: float = 250.0, n_components: int = 4, k_features: int = 8) -> Pipeline:
+def build_m3_fbcsp(
+    srate: float = 250.0,
+    n_components: int = 4,
+    k_features: int = 8,
+    bands: Optional[Sequence[Tuple[float, float]]] = None,
+) -> Pipeline:
     """M3: FBCSP + MI tabanlı öznitelik seçimi + LDA."""
     return Pipeline([
         ("ensure_shape", EnsureChannelsFirst()),
-        ("fbcsp", FilterBankCSP(srate=srate, n_components=n_components)),
+        ("fbcsp", FilterBankCSP(srate=srate, n_components=n_components, bands=bands)),
         ("select_k", SelectKBest(score_func=mutual_info_classif, k=k_features)),
         ("clf", LinearDiscriminantAnalysis(solver="lsqr", shrinkage="auto")),
     ])

@@ -61,3 +61,17 @@ def test_epochs_subset():
     assert list(sub.labels) == list(epochs.labels[:3])
     if sub.raw_data is not None:
         assert sub.raw_data.shape[0] == 3
+
+
+def test_epochs_raw_data_notched_broadband():
+    """extract_epochs: raw_data 50/100 Hz çentikten geçmiş fakat 8-30 Hz bant geçirenden geçmemiş olmalı."""
+    rec = generate_offline_dataset(n_runs=2, trials_per_run=10, seed=103)
+    epochs = extract_epochs(rec, filter_mode="causal", f_low=8.0, f_high=30.0)
+
+    assert epochs.raw_data is not None, "epochs.raw_data None olmamalıdır."
+    assert epochs.raw_data.shape == epochs.data.shape
+
+    # >30 Hz gücü raw_data'da filtrelenmiş data'ya göre belirgin şekilde yüksek olmalı
+    # çünkü data 8-30 Hz bant geçirenden geçti, raw_data ise geçmedi
+    raw_hf_var = np.var(epochs.raw_data - epochs.data)
+    assert raw_hf_var > 0.1, "raw_data ile filtrelenmiş data arasında yüksek frekans farkı olmalıdır."

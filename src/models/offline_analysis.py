@@ -34,7 +34,7 @@ from src.models.evaluation import (
     plot_confusion_matrices,
     plot_time_resolved_accuracy,
 )
-from src.models.pipelines import build_pipelines
+from src.models.pipelines import FilterBankCSP, build_pipelines
 from src.processing.artifacts import reject_artifacts
 from src.processing.epochs import extract_epochs
 from src.processing.erd_analysis import (
@@ -111,9 +111,25 @@ def generate_markdown_report(
         f"## 2. Şans Seviyesi ve İstatistiki Anlamlılık",
         f"",
         f"- **Teorik Şans Seviyesi:** %{results_dict.get('chance_level_theory', 0.5)*100:.1f}",
-        f"- **Ampirik %95 Şans Eşiği (Permütasyon):** %{perm_test.get('chance_level_95', 0.5)*100:.1f}",
-        f"- **Permütasyon Testi p-değeri:** `{perm_test.get('p_value', 1.0):.4f}` "
-        f"({'✅ İstatistiksel olarak anlamlı (p < 0.05)' if perm_test.get('p_value', 1.0) < 0.05 else '❌ Anlamlı değil (şans seviyesinde)'})",
+        f"- **Seçim-Düzeltilmiş %95 Şans Eşiği (Max-Statistic):** %{perm_test.get('selection_corrected_chance_95', perm_test.get('chance_level_95', 0.5))*100:.1f}",
+        f"- **Model Seçimi Düzeltilmiş p-değeri (Max-Statistic):** `{perm_test.get('selection_corrected_p_value', perm_test.get('p_value', 1.0)):.4f}` "
+        f"({'✅ İstatistiksel olarak anlamlı (p < 0.05)' if perm_test.get('selection_corrected_p_value', perm_test.get('p_value', 1.0)) < 0.05 else '❌ Anlamlı değil (şans seviyesinde)'})",
+        f"- **Düzeltilmemiş Model Bazlı p-değerleri:**",
+    ]
+
+    model_p_vals = perm_test.get("model_p_values", {})
+    if model_p_vals:
+        for m_name, m_p in model_p_vals.items():
+            lines.append(f"  - `{m_name}`: p = {m_p:.4f}")
+    else:
+        for m_name, r in models_res.items():
+            if "p_value" in r:
+                lines.append(f"  - `{m_name}`: p = {r['p_value']:.4f}")
+
+    lines.extend([
+        f"",
+        f"> [!NOTE]",
+        f"> **Seçim Düzeltmesi (D4):** 'Model Seçimi Düzeltilmiş p-değeri', 5 model arasından en iyisinin seçilmesi yanlılığını gidermek için run içi karıştırılmış etiketlerdeki maksimum model doğruluğu dağılımına (max-statistic) göre hesaplanmıştır.",
         f"",
         f"---",
         f"",
@@ -330,6 +346,7 @@ def run_offline_analysis(
         "window_tmax": 3.5,
         "window_sec": 3.0,
         "spatial_filter": "csp" if "CSP" in best_model_name else "none",
+        "fbcsp_subbands": [list(b) for b in FilterBankCSP.DEFAULT_BANDS],
         "data_sources": [data_source_desc],
     }
 

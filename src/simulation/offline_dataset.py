@@ -84,6 +84,7 @@ def generate_offline_dataset(
     artifact_rate: float = 0.15,
     session_drift: float = 0.0,
     emg_confound: bool = False,
+    emg_amplitude: float = 65.0,
     pause_between_runs_sec: float = 5.0,
 ) -> Recording:
     """Çevrimdışı sentetik bir kalibrasyon oturumu üretir.
@@ -100,6 +101,7 @@ def generate_offline_dataset(
     - artifact_rate: Artefaktlı deneme oranı (varsayılan %15).
     - session_drift: Oturumlar/runlar arası kazanç kayması oranı (0.0-0.3).
     - emg_confound: True ise sınıf bilgisi mu/beta'da değil, yalnızca >30 Hz kas aktivitesinde bulunur.
+    - emg_amplitude: emg_confound senaryosundaki kas patlaması genliği (uV, varsayılan 65.0).
     """
     rng = np.random.default_rng(seed)
 
@@ -285,19 +287,20 @@ def generate_offline_dataset(
         # Güç P ~ A^2 -> güç düşüşü drop ise genlik çarpanı sqrt(1 - drop)
         amp_factor = np.sqrt(max(0.01, 1.0 - drop))
 
-        if not emg_confound:
+        if not emg_confound and drop > 0.0:
+            ers_amp = 0.25 * drop
             if cls == "left":
                 # Sol el -> kontralateral C4 ERD
                 mu_envelope[idx_start:idx_end, c4_idx] -= (1.0 - amp_factor) * envelope_weight
                 beta_envelope[idx_start:idx_end, c4_idx] -= (1.0 - amp_factor) * envelope_weight
-                # İpsilateral C3 hafif senkronizasyon (ERS, +%10)
-                mu_envelope[idx_start:idx_end, c3_idx] += 0.10 * envelope_weight
+                # İpsilateral C3 hafif senkronizasyon (ERS, drop ile orantılı)
+                mu_envelope[idx_start:idx_end, c3_idx] += ers_amp * envelope_weight
             elif cls == "right":
                 # Sağ el -> kontralateral C3 ERD
                 mu_envelope[idx_start:idx_end, c3_idx] -= (1.0 - amp_factor) * envelope_weight
                 beta_envelope[idx_start:idx_end, c3_idx] -= (1.0 - amp_factor) * envelope_weight
-                # İpsilateral C4 hafif ERS (+%10)
-                mu_envelope[idx_start:idx_end, c4_idx] += 0.10 * envelope_weight
+                # İpsilateral C4 hafif ERS (drop ile orantılı)
+                mu_envelope[idx_start:idx_end, c4_idx] += ers_amp * envelope_weight
             elif cls == "feet":
                 # Ayak -> verteks Cz ERD
                 mu_envelope[idx_start:idx_end, cz_idx] -= (1.0 - amp_factor) * envelope_weight
@@ -317,20 +320,20 @@ def generate_offline_dataset(
             elif cls == "rest":
                 # Dinlenme: ERD yok
                 pass
-        else:
+        elif emg_confound:
             # EMG Confound Senaryosu:
             # Beyin ritimlerinde sınıf farkı YOK.
             # Sınıf bilgisi YALNIZCA >30 Hz kas aktivitesinde mevcut!
             if cls == "left":
                 # C4/paryetal kas patlaması (35-45 Hz)
                 t_vec = eeg_ts[idx_start:idx_end]
-                emg_burst = 65.0 * np.sin(2 * np.pi * 38.0 * t_vec) * envelope_weight
+                emg_burst = emg_amplitude * np.sin(2 * np.pi * 38.0 * t_vec) * envelope_weight
                 emg_signal[idx_start:idx_end, c4_idx] += emg_burst
                 emg_signal[idx_start:idx_end, p4_idx] += 0.5 * emg_burst
             elif cls == "right":
                 # C3/paryetal kas patlaması
                 t_vec = eeg_ts[idx_start:idx_end]
-                emg_burst = 65.0 * np.sin(2 * np.pi * 38.0 * t_vec) * envelope_weight
+                emg_burst = emg_amplitude * np.sin(2 * np.pi * 38.0 * t_vec) * envelope_weight
                 emg_signal[idx_start:idx_end, c3_idx] += emg_burst
                 emg_signal[idx_start:idx_end, p3_idx] += 0.5 * emg_burst
             elif cls == "rest":
@@ -420,6 +423,7 @@ def generate_offline_dataset(
         "beta_peak_hz": beta_peak_hz,
         "session_drift": session_drift,
         "emg_confound": emg_confound,
+        "emg_amplitude": emg_amplitude,
         "artifact_trials": artifact_trials_meta,
         "trial_records": trial_records,
         "impedances": {

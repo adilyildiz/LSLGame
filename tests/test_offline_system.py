@@ -83,6 +83,8 @@ def test_saved_model_and_metadata_reload():
         assert meta_json["channel_names"] == ["F3", "F4", "C3", "Cz", "C4", "P3", "P4"]
         assert meta_json["filter_mode"] == "causal"
         assert meta_json["srate"] == pytest.approx(250.0)
+        assert "fbcsp_subbands" in meta_json
+        assert len(meta_json["fbcsp_subbands"]) > 0
 
         # Modeli tekrar yükle ve tahminleri doğrula
         loaded_model = joblib.load(model_file)
