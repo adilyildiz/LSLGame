@@ -1,0 +1,251 @@
+"""BCI_Control Arayüz Sözleşmesi ve İletişim Altyapısı.
+
+PLAN.md Bölüm 4.3 ve agy_tasks/01_faz0_faz2.md uyarınca:
+BCI_Control LSL akışı, oyun/uygulama ile zihinsel veya simüle edilmiş kontrol kaynakları
+arasındaki tak-çıkar köprüdür.
+
+İki mod desteklenir:
+1. Ayrık Mod (Discrete):
+   5 kanal: ['p_left', 'p_right', 'p_up', 'p_down', 'p_rest']
+   Değerler: [0.0, 1.0] aralığında sınıf olasılıkları.
+2. Sürekli Mod (Continuous):
+   2 kanal: ['vx', 'vy']
+   Değerler: [-1.0, 1.0] aralığında normalize hızlar.
+"""
+
+from __future__ import annotations
+
+import enum
+import logging
+import time
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import numpy as np
+import pylsl
+
+logger = logging.getLogger(__name__)
+
+STREAM_NAME = "BCI_Control"
+STREAM_TYPE = "Control"
+DEFAULT_SRATE = 20.0  # Hz
+
+DISCRETE_CHANNELS = ["p_left", "p_right", "p_up", "p_down", "p_rest"]
+CONTINUOUS_CHANNELS = ["vx", "vy"]
+
+
+class ControlMode(str, enum.Enum):
+    DISCRETE = "discrete"
+    CONTINUOUS = "continuous"
+
+
+class Direction(str, enum.Enum):
+    LEFT = "left"
+    RIGHT = "right"
+    UP = "up"
+    DOWN = "down"
+    REST = "rest"
+
+
+def create_control_stream_info(
+    mode: Union[ControlMode, str] = ControlMode.DISCRETE,
+    srate: float = DEFAULT_SRATE,
+    source_id: str = "BCI_Control_Source",
+) -> pylsl.StreamInfo:
+    """Belirtilen mod için BCI_Control StreamInfo nesnesi oluşturur."""
+    mode_val = ControlMode(mode)
+    if mode_val == ControlMode.DISCRETE:
+        ch_labels = DISCRETE_CHANNELS
+    else:
+        ch_labels = CONTINUOUS_CHANNELS
+
+    info = pylsl.StreamInfo(
+        name=STREAM_NAME,
+        type=STREAM_TYPE,
+        channel_count=len(ch_labels),
+        nominal_srate=srate,
+        channel_format=pylsl.cf_float32,
+        source_id=source_id,
+    )
+
+    desc = info.desc()
+    desc.append_child_value("mode", mode_val.value)
+    chans = desc.append_child("channels")
+    for lbl in ch_labels:
+        ch = chans.append_child("channel")
+        ch.append_child_value("label", lbl)
+        ch.append_child_value("type", "Control")
+        ch.append_child_value("unit", "probability" if mode_val == ControlMode.DISCRETE else "norm_vel")
+
+    return info
+
+
+def identify_control_mode(info_or_channel_count: Union[pylsl.StreamInfo, int]) -> ControlMode:
+    """Kanal sayısı veya XML meta verisinden kontrol modunu belirler."""
+    if isinstance(info_or_channel_count, pylsl.StreamInfo):
+        ch_count = info_or_channel_count.channel_count()
+        mode_val = info_or_channel_count.desc().child_value("mode")
+        if mode_val in (ControlMode.DISCRETE.value, ControlMode.CONTINUOUS.value):
+            return ControlMode(mode_val)
+    else:
+        ch_count = int(info_or_channel_count)
+
+    if ch_count == len(DISCRETE_CHANNELS):
+        return ControlMode.DISCRETE
+    elif ch_count == len(CONTINUOUS_CHANNELS):
+        return ControlMode.CONTINUOUS
+    else:
+        raise ValueError(f"Bilinmeyen BCI_Control kanal sayısı: {ch_count}")
+
+
+class ControlSender:
+    """BCI_Control akışını yayınlayan sınıf."""
+
+    def __init__(
+        self,
+        mode: Union[ControlMode, str] = ControlMode.DISCRETE,
+        srate: float = DEFAULT_SRATE,
+        source_id: str = "BCI_Control_Sender",
+    ):
+        self.mode = ControlMode(mode)
+        self.srate = float(srate)
+        self.stream_info = create_control_stream_info(self.mode, srate=self.srate, source_id=source_id)
+        self.outlet = pylsl.StreamOutlet(self.stream_info)
+
+    def send_discrete(
+        self,
+        p_left: float,
+        p_right: float,
+        p_up: float = 0.0,
+        p_down: float = 0.0,
+        p_rest: float = 0.0,
+    ) -> None:
+        """Ayrık sınıf olasılıklarını yayınlar."""
+        if self.mode != ControlMode.DISCRETE:
+            raise RuntimeError("ControlSender sürekli (continuous) modda yapılandırılmış.")
+        sample = [float(p_left), float(p_right), float(p_up), float(p_down), float(p_rest)]
+        self.outlet.push_sample(sample)
+
+    def send_continuous(self, vx: float, vy: float) -> None:
+        """Sürekli hız vektörünü (vx, vy) yayınlar."""
+        if self.mode != ControlMode.CONTINUOUS:
+            raise RuntimeError("ControlSender ayrık (discrete) modda yapılandırılmış.")
+        vx_c = float(np.clip(vx, -1.0, 1.0))
+        vy_c = float(np.clip(vy, -1.0, 1.0))
+        self.outlet.push_sample([vx_c, vy_c])
+
+
+class ControlReceiver:
+    """BCI_Control akışını okuyan ve oyuna/uygulamaya sunan sınıf."""
+
+    def __init__(
+        self,
+        stream_info: Optional[pylsl.StreamInfo] = None,
+        timeout: float = 5.0,
+        threshold: float = 0.5,
+    ):
+        self.threshold = float(threshold)
+        if stream_info is None:
+            streams = pylsl.resolve_byprop("name", STREAM_NAME, timeout=timeout)
+            if not streams:
+                # Type ile arama alternatifi
+                streams = pylsl.resolve_byprop("type", STREAM_TYPE, timeout=timeout)
+            if not streams:
+                raise TimeoutError(f"'{STREAM_NAME}' LSL akışı bulunamadı (zaman aşımı {timeout} sn).")
+            stream_info = streams[0]
+
+        self.stream_info = stream_info
+        self.inlet = pylsl.StreamInlet(self.stream_info, max_buflen=10)
+        self.mode = identify_control_mode(self.stream_info)
+        logger.info(f"BCI_Control akışına bağlandı. Mod: {self.mode.value}")
+
+    def pull_latest(self, timeout: float = 0.0) -> Optional[List[float]]:
+        """LSL'den son örneği çeker (varsa)."""
+        chunks, _ = self.inlet.pull_chunk(timeout=timeout)
+        if chunks:
+            return chunks[-1]
+        return None
+
+    def get_command(
+        self,
+        timeout: float = 0.0,
+        threshold: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """En son kontrol sinyalini yorumlanmış komut formatında döner."""
+        th = threshold if threshold is not None else self.threshold
+        sample = self.pull_latest(timeout=timeout)
+
+        if sample is None and timeout > 0.0:
+            start_t = time.perf_counter()
+            while (time.perf_counter() - start_t) < timeout:
+                sample = self.pull_latest(timeout=min(0.05, timeout))
+                if sample is not None:
+                    break
+                time.sleep(0.01)
+
+        result: Dict[str, Any] = {
+            "mode": self.mode.value,
+            "has_signal": sample is not None,
+            "raw": sample,
+            "direction": Direction.REST.value,
+            "confidence": 0.0,
+            "vx": 0.0,
+            "vy": 0.0,
+        }
+
+        if sample is None:
+            return result
+
+        if self.mode == ControlMode.DISCRETE:
+            # sample: [p_left, p_right, p_up, p_down, p_rest]
+            probs = np.array(sample, dtype=np.float32)
+            max_idx = int(np.argmax(probs))
+            max_p = float(probs[max_idx])
+            dirs = [
+                Direction.LEFT.value,
+                Direction.RIGHT.value,
+                Direction.UP.value,
+                Direction.DOWN.value,
+                Direction.REST.value,
+            ]
+            chosen_dir = dirs[max_idx]
+
+            # Eşik kontrolü
+            if chosen_dir != Direction.REST.value and max_p >= th:
+                result["direction"] = chosen_dir
+                result["confidence"] = max_p
+                # Ayrık modu sanal vx/vy'ye de çevir
+                if chosen_dir == Direction.LEFT.value:
+                    result["vx"] = -max_p
+                elif chosen_dir == Direction.RIGHT.value:
+                    result["vx"] = max_p
+                elif chosen_dir == Direction.UP.value:
+                    result["vy"] = max_p
+                elif chosen_dir == Direction.DOWN.value:
+                    result["vy"] = -max_p
+            else:
+                result["direction"] = Direction.REST.value
+                result["confidence"] = float(probs[4]) if len(probs) > 4 else (1.0 - max_p)
+
+        else:
+            # Sürekli mod: sample = [vx, vy]
+            vx = float(sample[0])
+            vy = float(sample[1]) if len(sample) > 1 else 0.0
+            result["vx"] = vx
+            result["vy"] = vy
+            mag = float(np.hypot(vx, vy))
+            result["confidence"] = mag
+
+            # Hız vektörünü yön kararına çevir
+            if mag >= th:
+                if abs(vx) > abs(vy):
+                    result["direction"] = Direction.RIGHT.value if vx > 0 else Direction.LEFT.value
+                else:
+                    result["direction"] = Direction.UP.value if vy > 0 else Direction.DOWN.value
+            else:
+                result["direction"] = Direction.REST.value
+
+        return result
+
+    def close(self) -> None:
+        if hasattr(self, "inlet") and self.inlet:
+            self.inlet.close_stream()
