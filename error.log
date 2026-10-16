@@ -1,0 +1,14 @@
+<frozen runpy>:128: RuntimeWarning: 'src.game.ball_roll' found in sys.modules after import of package 'src.game', but prior to execution of 'src.game.ball_roll'; this may result in unpredictable behaviour
+2026-10-16 11:31:02.961 (   0.010s) [        C20F37A7]      netinterfaces.cpp:36    INFO| netif '{3C335D99-4985-4658-ABD5-F9D00930461F}' (status: 1, multicast: 1
+2026-10-16 11:31:02.961 (   0.010s) [        C20F37A7]      netinterfaces.cpp:58    INFO| 	IPv6 ifindex 59
+2026-10-16 11:31:02.961 (   0.010s) [        C20F37A7]      netinterfaces.cpp:36    INFO| netif '{464C402D-DAA4-4024-B7C7-F69F2FAA2544}' (status: 2, multicast: 1
+2026-10-16 11:31:02.961 (   0.010s) [        C20F37A7]      netinterfaces.cpp:36    INFO| netif '{E42E7AB7-0C74-40A1-8EDE-D466C585CD47}' (status: 2, multicast: 1
+2026-10-16 11:31:02.962 (   0.011s) [        C20F37A7]      netinterfaces.cpp:36    INFO| netif '{ED149363-172A-48E2-B5E4-F1A4D589429A}' (status: 2, multicast: 1
+2026-10-16 11:31:02.962 (   0.011s) [        C20F37A7]      netinterfaces.cpp:36    INFO| netif '{D8943EA3-C5F7-4DD0-BCDC-D043EA7F080D}' (status: 1, multicast: 1
+2026-10-16 11:31:02.962 (   0.011s) [        C20F37A7]      netinterfaces.cpp:58    INFO| 	IPv6 ifindex 19
+2026-10-16 11:31:02.962 (   0.011s) [        C20F37A7]      netinterfaces.cpp:36    INFO| netif '{F2707CF8-2344-43FD-A43B-72B99A2B2CAD}' (status: 2, multicast: 1
+2026-10-16 11:31:02.962 (   0.011s) [        C20F37A7]      netinterfaces.cpp:36    INFO| netif '{317011CB-AC81-4483-8BAE-828106C4F9C3}' (status: 2, multicast: 1
+2026-10-16 11:31:02.962 (   0.011s) [        C20F37A7]      netinterfaces.cpp:36    INFO| netif '{171ACDCE-C7C4-11EF-8617-806E6F6E6963}' (status: 1, multicast: 1
+2026-10-16 11:31:02.962 (   0.011s) [        C20F37A7]      netinterfaces.cpp:58    INFO| 	IPv6 ifindex 1
+2026-10-16 11:31:02.962 (   0.011s) [        C20F37A7]         api_config.cpp:126   INFO| Loaded default config
+2026-10-16 11:31:02.963 (   0.011s) [        C20F37A7]             common.cpp:82    INFO| git:42118f80ff9235be11cd54d24b3a25f576c34812/branch:refs/tags/v1.18.0.b5/build:Release/compiler:MSVC-19.29.30159.0/link:SHARED

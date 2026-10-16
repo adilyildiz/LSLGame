@@ -115,7 +115,7 @@ def generate_markdown_report(
         f"- **Model Seçimi Düzeltilmiş p-değeri (Max-Statistic):** `{perm_test.get('selection_corrected_p_value', perm_test.get('p_value', 1.0)):.4f}` "
         f"({'✅ İstatistiksel olarak anlamlı (p < 0.05)' if perm_test.get('selection_corrected_p_value', perm_test.get('p_value', 1.0)) < 0.05 else '❌ Anlamlı değil (şans seviyesinde)'})",
         f"- **Düzeltilmemiş Model Bazlı p-değerleri:**",
-    ]
+    ])
 
     model_p_vals = perm_test.get("model_p_values", {})
     if model_p_vals:
